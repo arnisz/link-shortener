@@ -11,14 +11,14 @@
  * The signature segment is a fixed placeholder – it is never verified in the
  * worker code, only the payload is used.
  */
-export function buildFakeIdToken(payload: Record<string, unknown>): string {
+export function buildFakeIdToken(payload: Record<string, unknown>, headerOverrides: Record<string, unknown> = {}): string {
 	const encode = (obj: unknown) =>
 		btoa(JSON.stringify(obj))
 			.replace(/\+/g, "-")
 			.replace(/\//g, "_")
 			.replace(/=+$/, "");
 
-	const header = encode({ alg: "RS256", typ: "JWT" });
+	const header = encode({ alg: "RS256", typ: "JWT", kid: "test-kid", ...headerOverrides });
 	const body = encode(payload);
 	return `${header}.${body}.fakesig`;
 }

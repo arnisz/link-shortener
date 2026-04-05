@@ -29,21 +29,11 @@ type GoogleIdTokenPayload = {
 	iat: number;
 };
 
-function base64UrlEncode(input: string): string {
-	return btoa(input).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-}
-
 function base64UrlDecode(input: string): string {
 	input = input.replace(/-/g, "+").replace(/_/g, "/");
 	const pad = input.length % 4;
 	if (pad) input += "=".repeat(4 - pad);
 	return atob(input);
-}
-
-async function sha256Hex(input: string): Promise<string> {
-	const data = new TextEncoder().encode(input);
-	const hash = await crypto.subtle.digest("SHA-256", data);
-	return [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 async function randomId(bytes = 24): Promise<string> {
@@ -93,8 +83,99 @@ async function parseGoogleIdToken(idToken: string): Promise<GoogleIdTokenPayload
 	if (parts.length !== 3) {
 		throw new Error("Invalid ID token format");
 	}
-	const payloadJson = base64UrlDecode(parts[1]);
-	return JSON.parse(payloadJson) as GoogleIdTokenPayload;
+
+	const [headerB64, payloadB64, signatureB64] = parts;
+
+	let header: { kid?: string; alg?: string };
+	try {
+		header = JSON.parse(base64UrlDecode(headerB64));
+	} catch {
+		throw new Error("Invalid JWT header");
+	}
+
+	if (header.alg !== "RS256") {
+		throw new Error("Unsupported signature algorithm");
+	}
+
+	if (!header.kid) {
+		throw new Error("Missing kid in JWT header");
+	}
+
+	const payloadJson = base64UrlDecode(payloadB64);
+	const payload = JSON.parse(payloadJson) as GoogleIdTokenPayload;
+
+	// 1. Verify issuer
+	if (payload.iss !== "https://accounts.google.com" && payload.iss !== "accounts.google.com") {
+		throw new Error("Invalid issuer");
+	}
+
+	// 2. Verify email_verified
+	if (payload.email_verified !== true) {
+		throw new Error("Email not verified");
+	}
+
+	// 3. Verify signature
+	const keys = await fetchGooglePublicKeys();
+	const key = keys.find(k => k.kid === header.kid);
+	if (!key) {
+		throw new Error("Public key not found for kid");
+	}
+
+	const isValid = await verifyRS256Signature(`${headerB64}.${payloadB64}`, signatureB64, key);
+	if (!isValid) {
+		throw new Error("Invalid JWT signature");
+	}
+
+	return payload;
+}
+
+interface GoogleJWK {
+	kid: string;
+	n: string;
+	e: string;
+	kty: "RSA";
+	alg: "RS256";
+	use: "sig";
+}
+
+let googleKeysCache: GoogleJWK[] | null = null;
+let googleKeysExpiry = 0;
+
+async function fetchGooglePublicKeys(): Promise<GoogleJWK[]> {
+	if (googleKeysCache && Date.now() < googleKeysExpiry) {
+		return googleKeysCache;
+	}
+
+	const resp = await fetch("https://www.googleapis.com/oauth2/v3/certs");
+	if (!resp.ok) {
+		throw new Error("Failed to fetch Google public keys");
+	}
+
+	const { keys } = await resp.json<{ keys: GoogleJWK[] }>();
+	googleKeysCache = keys;
+	// Cache for 1 hour
+	googleKeysExpiry = Date.now() + 3600 * 1000;
+	return keys;
+}
+
+async function verifyRS256Signature(data: string, signatureB64Url: string, jwk: GoogleJWK): Promise<boolean> {
+	const key = await crypto.subtle.importKey(
+		"jwk",
+		jwk,
+		{ name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+		false,
+		["verify"]
+	);
+
+	const signature = Uint8Array.from(base64UrlDecode(signatureB64Url), c => c.charCodeAt(0));
+	const dataUint8 = new TextEncoder().encode(data);
+
+	return await crypto.subtle.verify(
+		"RSASSA-PKCS1-v1_5",
+		key,
+		signature,
+		dataUint8
+	);
 }
 
 async function upsertUserFromGoogle(payload: GoogleIdTokenPayload, env: Env): Promise<string> {
@@ -320,14 +401,19 @@ export default {
 				return new Response(`Google token exchange failed: ${await tokenResp.text()}`, { status: 502 });
 			}
 
-			const tokenJson = await tokenResp.json<GoogleTokenResponse>();
-			if (!tokenJson.id_token) {
-				return new Response("Missing id_token", { status: 502 });
-			}
+		const tokenJson = await tokenResp.json<GoogleTokenResponse>();
+		if (!tokenJson.id_token) {
+			return new Response("Missing id_token", { status: 502 });
+		}
 
-		const payload = await parseGoogleIdToken(tokenJson.id_token);
+		let payload: GoogleIdTokenPayload;
+		try {
+			payload = await parseGoogleIdToken(tokenJson.id_token);
+		} catch (e: any) {
+			return new Response(`ID token verification failed: ${e.message}`, { status: 400 });
+		}
 
-			// Verify nonce to guard against token replay / CSRF
+		// Verify nonce to guard against token replay / CSRF
 			if (payload.nonce !== cookieNonce) {
 				return new Response("Invalid nonce", { status: 400 });
 			}

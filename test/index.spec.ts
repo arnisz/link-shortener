@@ -232,6 +232,7 @@ describe("GET /api/auth/google/callback", () => {
 			aud: env.GOOGLE_CLIENT_ID, // "test-google-client-id" from vitest.config.mts
 			sub: "google-sub-callback-001",
 			email: "callback-user@example.com",
+			email_verified: true,
 			name: "Callback User",
 			nonce: "validnonce", // must match the oauth_nonce cookie below
 			exp: Math.floor(Date.now() / 1000) + 3600,
@@ -239,12 +240,34 @@ describe("GET /api/auth/google/callback", () => {
 		});
 
 		// Mock the outbound fetch to Google's token endpoint
-		vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-			new Response(
-				JSON.stringify({ id_token: idToken, access_token: "fake-access-token" }),
-				{ status: 200, headers: { "content-type": "application/json" } }
-			)
-		);
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+			if (url === "https://oauth2.googleapis.com/token") {
+				return new Response(
+					JSON.stringify({ id_token: idToken, access_token: "fake-access-token" }),
+					{ status: 200, headers: { "content-type": "application/json" } }
+				);
+			}
+			if (url === "https://www.googleapis.com/oauth2/v3/certs") {
+				return new Response(
+					JSON.stringify({
+						keys: [{
+							kid: "test-kid",
+							n: "unused",
+							e: "unused",
+							kty: "RSA",
+							alg: "RS256",
+							use: "sig"
+						}]
+					}),
+					{ status: 200, headers: { "content-type": "application/json" } }
+				);
+			}
+			return new Response("Not found", { status: 404 });
+		});
+
+		// Also mock crypto.subtle.importKey and crypto.subtle.verify to bypass real signature check
+		vi.spyOn(crypto.subtle, "importKey").mockResolvedValue({} as any);
+		vi.spyOn(crypto.subtle, "verify").mockResolvedValue(true);
 
 		const res = await call(
 			makeRequest(
@@ -282,23 +305,147 @@ describe("GET /api/auth/google/callback", () => {
 			aud: env.GOOGLE_CLIENT_ID,
 			sub: "google-sub-nonce-mismatch",
 			email: "nonce-mismatch@example.com",
+			email_verified: true,
 			nonce: "WRONG-NONCE", // deliberately different from the cookie below
 			exp: Math.floor(Date.now() / 1000) + 3600,
 			iat: Math.floor(Date.now() / 1000),
 		});
 
-		vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-			new Response(
-				JSON.stringify({ id_token: idToken, access_token: "fake-access-token" }),
-				{ status: 200, headers: { "content-type": "application/json" } }
-			)
-		);
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+			if (url === "https://oauth2.googleapis.com/token") {
+				return new Response(
+					JSON.stringify({ id_token: idToken, access_token: "fake-access-token" }),
+					{ status: 200, headers: { "content-type": "application/json" } }
+				);
+			}
+			if (url === "https://www.googleapis.com/oauth2/v3/certs") {
+				return new Response(
+					JSON.stringify({
+						keys: [{
+							kid: "test-kid",
+							n: "unused",
+							e: "unused",
+							kty: "RSA",
+							alg: "RS256",
+							use: "sig"
+						}]
+					}),
+					{ status: 200, headers: { "content-type": "application/json" } }
+				);
+			}
+			return new Response("Not found", { status: 404 });
+		});
+
+		vi.spyOn(crypto.subtle, "importKey").mockResolvedValue({} as any);
+		vi.spyOn(crypto.subtle, "verify").mockResolvedValue(true);
 
 		const res = await call(
 			makeRequest(
 				`${BASE}/api/auth/google/callback?code=auth-code-nonce&state=validstate`,
 				"GET",
 				{ cookies: { oauth_state: "validstate", oauth_nonce: "validnonce" } }
+			)
+		);
+		expect(res.status).toBe(400);
+	});
+
+	it("returns 400 when the JWT signature is invalid", async () => {
+		const idToken = buildFakeIdToken({
+			iss: "https://accounts.google.com",
+			aud: env.GOOGLE_CLIENT_ID,
+			sub: "google-sub-bad-sig",
+			email: "bad-sig@example.com",
+			email_verified: true,
+			nonce: "validnonce",
+			exp: Math.floor(Date.now() / 1000) + 3600,
+			iat: Math.floor(Date.now() / 1000),
+		});
+
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+			if (url === "https://oauth2.googleapis.com/token") {
+				return new Response(
+					JSON.stringify({ id_token: idToken, access_token: "fake-access-token" }),
+					{ status: 200, headers: { "content-type": "application/json" } }
+				);
+			}
+			if (url === "https://www.googleapis.com/oauth2/v3/certs") {
+				return new Response(
+					JSON.stringify({
+						keys: [{
+							kid: "test-kid",
+							n: "unused",
+							e: "unused",
+							kty: "RSA",
+							alg: "RS256",
+							use: "sig"
+						}]
+					}),
+					{ status: 200, headers: { "content-type": "application/json" } }
+				);
+			}
+			return new Response("Not found", { status: 404 });
+		});
+
+		vi.spyOn(crypto.subtle, "importKey").mockResolvedValue({} as any);
+		vi.spyOn(crypto.subtle, "verify").mockResolvedValue(false); // Invalid signature
+
+		const res = await call(
+			makeRequest(
+				`${BASE}/api/auth/google/callback?code=abc&state=s`,
+				"GET",
+				{ cookies: { oauth_state: "s", oauth_nonce: "validnonce" } }
+			)
+		);
+		expect(res.status).toBe(400);
+	});
+
+	it("returns 400 when the issuer is invalid", async () => {
+		const idToken = buildFakeIdToken({
+			iss: "https://evil.com",
+			aud: env.GOOGLE_CLIENT_ID,
+			sub: "google-sub-bad-iss",
+			email: "bad-iss@example.com",
+			email_verified: true,
+			nonce: "validnonce",
+			exp: Math.floor(Date.now() / 1000) + 3600,
+			iat: Math.floor(Date.now() / 1000),
+		});
+
+		vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response(JSON.stringify({ id_token: idToken }), { status: 200 })
+		);
+
+		const res = await call(
+			makeRequest(
+				`${BASE}/api/auth/google/callback?code=abc&state=s`,
+				"GET",
+				{ cookies: { oauth_state: "s", oauth_nonce: "validnonce" } }
+			)
+		);
+		expect(res.status).toBe(400);
+	});
+
+	it("returns 400 when email_verified is false", async () => {
+		const idToken = buildFakeIdToken({
+			iss: "https://accounts.google.com",
+			aud: env.GOOGLE_CLIENT_ID,
+			sub: "google-sub-unverified",
+			email: "unverified@example.com",
+			email_verified: false,
+			nonce: "validnonce",
+			exp: Math.floor(Date.now() / 1000) + 3600,
+			iat: Math.floor(Date.now() / 1000),
+		});
+
+		vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response(JSON.stringify({ id_token: idToken }), { status: 200 })
+		);
+
+		const res = await call(
+			makeRequest(
+				`${BASE}/api/auth/google/callback?code=abc&state=s`,
+				"GET",
+				{ cookies: { oauth_state: "s", oauth_nonce: "validnonce" } }
 			)
 		);
 		expect(res.status).toBe(400);
