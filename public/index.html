@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="de">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>YAQQ – Link-Kürzer</title>
+	<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<main class="container">
+	<h1>YAQQ</h1>
+	<p>Dein minimaler Link-Kürzer. URLs kürzen, teilen und verwalten.</p>
+	<p id="landing-action">
+		<a href="/login"><button type="button">Mit Google anmelden</button></a>
+	</p>
+	<p id="landing-status" style="font-size:14px;color:#6b7280;"></p>
+</main>
+<script>
+	// If already logged in, skip the landing page entirely.
+	fetch("/api/me")
+		.then(r => r.json())
+		.then(data => {
+			if (data.authenticated) {
+				window.location.replace("/app.html");
+			}
+		})
+		.catch(() => { /* network error – stay on landing */ });
+</script>
+</body>
+</html>

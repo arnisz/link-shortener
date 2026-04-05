@@ -1,3 +1,14 @@
+.idea/
+
+#local databases
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+#Windows Trash
+.DS_Store
+Thumbs.db
+
 # Logs
 
 logs

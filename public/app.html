@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="de">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>YAQQ – Link-Kürzer</title>
+	<link rel="stylesheet" href="/style.css" />
+	<style>
+		input[type="url"], input[type="text"], input[type="datetime-local"] {
+			width: 100%; box-sizing: border-box; padding: 8px 10px;
+			font-size: 15px; border: 1px solid #d1d5db; border-radius: 6px; margin-top: 4px;
+		}
+		label { font-weight: 600; font-size: 14px; }
+		.field { margin-bottom: 12px; }
+		.field-row { display: flex; gap: 12px; }
+		.field-row .field { flex: 1; }
+		#create-status { margin: 8px 0; min-height: 1.4em; color: #2563eb; font-size: 14px; }
+		#create-status.error { color: #dc2626; }
+		#links-status { margin: 4px 0; min-height: 1.2em; font-size: 14px; }
+		#links-status.error { color: #dc2626; }
+		.link-row { padding: 14px 0; border-bottom: 1px solid #e5e7eb; }
+		.link-row:last-child { border-bottom: none; }
+		.link-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+		.link-short { font-family: monospace; font-size: 15px; }
+		.link-meta { font-size: 13px; color: #6b7280; margin-top: 4px; }
+		.badge { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 12px; font-weight: 600; }
+		.badge-active   { background: #d1fae5; color: #065f46; }
+		.badge-inactive { background: #fee2e2; color: #991b1b; }
+		.badge-expired  { background: #fef3c7; color: #92400e; }
+		.btn-sm { padding: 4px 10px; font-size: 13px; cursor: pointer; border-radius: 5px; border: 1px solid #d1d5db; background: #f9fafb; }
+		hr { border: none; border-top: 1px solid #e5e7eb; margin: 24px 0; }
+		#links-list { margin-top: 8px; }
+	</style>
+</head>
+<body>
+<main class="container">
+	<h1>YAQQ</h1>
+	<p id="status">Lade…</p>
+
+	<form id="logout-form" method="post" action="/logout" hidden>
+		<button type="submit">Logout</button>
+	</form>
+
+	<section id="link-section" hidden>
+		<hr>
+		<h2 style="margin-top:0">Neuen Link kürzen</h2>
+		<form id="create-form">
+			<div class="field">
+				<label for="f-url">Ziel-URL *</label>
+				<input type="url" id="f-url" name="target_url"
+					placeholder="https://example.com/sehr/langer/pfad" required />
+			</div>
+			<div class="field-row">
+				<div class="field">
+					<label for="f-title">Titel (optional)</label>
+					<input type="text" id="f-title" name="title" placeholder="Mein Link" />
+				</div>
+				<div class="field">
+					<label for="f-alias">Alias (optional)</label>
+					<input type="text" id="f-alias" name="alias" placeholder="mein-link"
+						pattern="[a-z0-9_\-]{3,50}" title="3–50 Zeichen: Kleinbuchstaben, Ziffern, Bindestrich, Unterstrich" />
+				</div>
+			</div>
+			<div class="field">
+				<label for="f-expires">Ablaufdatum (optional)</label>
+				<input type="datetime-local" id="f-expires" name="expires_at" />
+			</div>
+			<button type="submit">Erstellen</button>
+		</form>
+		<p id="create-status"></p>
+
+		<h2>Meine Links</h2>
+		<p id="links-status" style="min-height:1.2em;font-size:14px;"></p>
+		<div id="links-list"><em>Lade…</em></div>
+	</section>
+</main>
+
+<script>
+	function esc(s) {
+		return String(s ?? "")
+			.replace(/&/g, "&amp;").replace(/</g, "&lt;")
+			.replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+	}
+
+	function linkBadge(link) {
+		const now = Date.now();
+		if (!link.is_active) return '<span class="badge badge-inactive">Inaktiv</span>';
+		if (link.expires_at && new Date(link.expires_at).getTime() < now)
+			return '<span class="badge badge-expired">Abgelaufen</span>';
+		return '<span class="badge badge-active">Aktiv</span>';
+	}
+
+	function fmtDate(iso) {
+		if (!iso) return "";
+		return new Date(iso).toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" });
+	}
+
+	async function toggleLink(id, currentIsActive) {
+		const resp = await fetch(`/api/links/${id}/update`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ is_active: !currentIsActive }),
+		});
+		if (resp.ok) {
+			await loadLinks();
+		} else if (resp.status === 401) {
+			window.location.href = "/login";
+		} else {
+			const data = await resp.json().catch(() => ({}));
+			const statusEl = document.getElementById("links-status");
+			if (statusEl) {
+				statusEl.textContent = "Fehler: " + (data.error ?? resp.statusText);
+				statusEl.className = "error";
+			}
+		}
+	}
+
+	async function loadLinks() {
+		const list = document.getElementById("links-list");
+		const statusEl = document.getElementById("links-status");
+		if (statusEl) { statusEl.textContent = ""; statusEl.className = ""; }
+		try {
+			const resp = await fetch("/api/links");
+			if (resp.status === 401) {
+				list.innerHTML = 'Sitzung abgelaufen. <a href="/login">Bitte neu anmelden.</a>';
+				return;
+			}
+			if (!resp.ok) { list.textContent = "Fehler beim Laden der Links."; return; }
+			const links = await resp.json();
+			if (!links.length) {
+				list.innerHTML = "<em>Noch keine Links – erstelle deinen ersten!</em>";
+				return;
+			}
+			list.innerHTML = links.map(l => `
+				<div class="link-row">
+					<div class="link-head">
+						<strong>${esc(l.title || l.short_code)}</strong>
+						${linkBadge(l)}
+						<button class="btn-sm" onclick="toggleLink('${esc(l.id)}', !!${l.is_active})">
+							${l.is_active ? "Deaktivieren" : "Aktivieren"}
+						</button>
+					</div>
+					<div class="link-short">
+						<a href="${esc(l.short_url)}" target="_blank" rel="noopener">${esc(l.short_url)}</a>
+					</div>
+					<div class="link-meta">→ ${esc(l.target_url)}</div>
+					<div class="link-meta">
+						${l.click_count} Klick${l.click_count !== 1 ? "s" : ""}
+						&middot; Erstellt: ${fmtDate(l.created_at)}
+						${l.expires_at ? "&middot; Läuft ab: " + fmtDate(l.expires_at) : ""}
+					</div>
+				</div>
+			`).join("");
+		} catch (err) {
+			list.textContent = String(err);
+		}
+	}
+
+	document.getElementById("create-form").addEventListener("submit", async (e) => {
+		e.preventDefault();
+		const statusEl = document.getElementById("create-status");
+		statusEl.className = "";
+		statusEl.textContent = "Erstelle…";
+		const form = e.currentTarget;
+
+		const expiresRaw = form.elements["expires_at"].value;
+		const body = {
+			target_url: form.elements["target_url"].value.trim(),
+			title:      form.elements["title"].value.trim() || undefined,
+			alias:      form.elements["alias"].value.trim() || undefined,
+			// Convert datetime-local to UTC ISO so the Worker receives a proper timestamp
+			expires_at: expiresRaw ? new Date(expiresRaw).toISOString() : undefined,
+		};
+
+		try {
+			const resp = await fetch("/api/links", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(body),
+			});
+			const data = await resp.json();
+			if (!resp.ok) {
+				statusEl.className = "error";
+				statusEl.textContent = "Fehler: " + (data.error ?? resp.statusText);
+				return;
+			}
+			statusEl.textContent = "✓ Erstellt: " + data.short_url;
+			form.reset();
+			await loadLinks();
+		} catch (err) {
+			statusEl.className = "error";
+			statusEl.textContent = "Fehler: " + String(err);
+		}
+	});
+
+	async function loadMe() {
+		const status      = document.getElementById("status");
+		const logoutForm  = document.getElementById("logout-form");
+		const linkSection = document.getElementById("link-section");
+		try {
+			const resp = await fetch("/api/me");
+			const data = await resp.json();
+			if (!data.authenticated) {
+				status.innerHTML = 'Nicht eingeloggt. <a href="/login"><button type="button">Mit Google anmelden</button></a>';
+				logoutForm.hidden  = true;
+				linkSection.hidden = true;
+				return;
+			}
+			status.textContent = "Eingeloggt als " + esc(data.user.email);
+			logoutForm.hidden  = false;
+			linkSection.hidden = false;
+			await loadLinks();
+		} catch (err) {
+			status.textContent = "Fehler beim Laden: " + String(err);
+			logoutForm.hidden  = true;
+			linkSection.hidden = true;
+		}
+	}
+
+	loadMe();
+</script>
+</body>
+</html>
