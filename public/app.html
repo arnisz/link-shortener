@@ -15,6 +15,7 @@
 		.field-row { display: flex; gap: 12px; }
 		.field-row .field { flex: 1; }
 		#create-status { margin: 8px 0; min-height: 1.4em; color: #2563eb; font-size: 14px; }
+		/* Hinweis: Die .error Klasse wird dynamisch über JS gesetzt, IDE-Warnungen hierüber können ignoriert werden */
 		#create-status.error { color: #dc2626; }
 		#links-status { margin: 4px 0; min-height: 1.2em; font-size: 14px; }
 		#links-status.error { color: #dc2626; }
@@ -58,7 +59,7 @@
 				<div class="field">
 					<label for="f-alias">Alias (optional)</label>
 					<input type="text" id="f-alias" name="alias" placeholder="mein-link"
-						pattern="[a-z0-9_\-]{3,50}" title="3–50 Zeichen: Kleinbuchstaben, Ziffern, Bindestrich, Unterstrich" />
+						pattern="[a-z0-9_-]{3,50}" title="3–50 Zeichen: Kleinbuchstaben, Ziffern, Bindestrich, Unterstrich" />
 				</div>
 			</div>
 			<div class="field">
