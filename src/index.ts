@@ -553,46 +553,54 @@ export default {
 			const now = new Date().toISOString();
 			let shortCode: string;
 
-			if (body.alias != null) {
-				// Custom alias path
-				const alias = typeof body.alias === "string" ? body.alias.trim() : "";
-				const aliasError = validateAlias(alias);
-				if (aliasError) {
-					return new Response(JSON.stringify({ error: aliasError }), {
-						status: 400,
-						headers: { "content-type": "application/json; charset=UTF-8" }
-					});
-				}
-				const conflict = await env.hello_cf_spa_db
-					.prepare("SELECT id FROM links WHERE short_code = ?")
-					.bind(alias)
-					.first();
-				if (conflict) {
-					return new Response(JSON.stringify({ error: "Alias already in use" }), {
-						status: 409,
-						headers: { "content-type": "application/json; charset=UTF-8" }
-					});
-				}
-				shortCode = alias;
-			} else {
-				// Auto-generate short code – retry up to 5 times on collision
-				let generated = "";
-				for (let i = 0; i < 5; i++) {
-					const candidate = generateShortCode();
-					const existing = await env.hello_cf_spa_db
-						.prepare("SELECT id FROM links WHERE short_code = ?")
-						.bind(candidate)
-						.first();
-					if (!existing) { generated = candidate; break; }
-				}
-				if (!generated) {
-					return new Response(JSON.stringify({ error: "Could not generate unique short code" }), {
-						status: 500,
-						headers: { "content-type": "application/json; charset=UTF-8" }
-					});
-				}
-				shortCode = generated;
+		if (body.alias !== undefined && body.alias !== null && typeof body.alias !== "string") {
+			return errResponse("alias must be a string", 400);
+		}
+
+		const normalizedAlias =
+			typeof body.alias === "string"
+				? body.alias
+						.normalize("NFKC")
+						.replace(/[\u2010\u2011\u2012\u2013\u2014\u2212]/g, "-")
+						.trim()
+				: "";
+
+		if (normalizedAlias) {
+			// Custom alias path
+			const aliasError = validateAlias(normalizedAlias);
+			if (aliasError) {
+				return errResponse(aliasError, 400);
 			}
+
+			const conflict = await env.hello_cf_spa_db
+				.prepare("SELECT id FROM links WHERE short_code = ?")
+				.bind(normalizedAlias)
+				.first();
+
+			if (conflict) {
+				return errResponse("Alias already in use", 409);
+			}
+
+			shortCode = normalizedAlias;
+		} else {
+			// Auto-generate short code – retry up to 5 times on collision
+			let generated = "";
+			for (let i = 0; i < 5; i++) {
+				const candidate = generateShortCode();
+				const existing = await env.hello_cf_spa_db
+					.prepare("SELECT id FROM links WHERE short_code = ?")
+					.bind(candidate)
+					.first();
+				if (!existing) { generated = candidate; break; }
+			}
+			if (!generated) {
+				return new Response(JSON.stringify({ error: "Could not generate unique short code" }), {
+					status: 500,
+					headers: { "content-type": "application/json; charset=UTF-8" }
+				});
+			}
+			shortCode = generated;
+		}
 
 			await env.hello_cf_spa_db
 				.prepare(

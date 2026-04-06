@@ -6,5 +6,7 @@ declare module "cloudflare:test" {
 		SESSION_SECRET: string;
 		// Var from wrangler.jsonc
 		APP_BASE_URL: string;
+		// HTML source of public/app.html, read at config time for pattern regression tests
+		APP_HTML_CONTENT: string;
 	}
 }

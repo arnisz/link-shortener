@@ -793,6 +793,64 @@ describe("POST /api/links – Phase 2", () => {
 		expect(data.expires_at).toBeTruthy();
 		expect(data.is_active).toBe(1);
 	});
+
+	// ── Alias normalisation ─────────────────────────────────────────────────
+
+	it("accepts an ASCII-hyphen alias", async () => {
+		const { sessionId } = await seedSession(env.hello_cf_spa_db);
+		const res = await call(
+			makeRequest(`${BASE}/api/links`, "POST", {
+				cookies: { sid: sessionId },
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ target_url: "https://example.com", alias: "valid-alias" }),
+			})
+		);
+		expect(res.status).toBe(201);
+		const data = await res.json<{ short_code: string }>();
+		expect(data.short_code).toBe("valid-alias");
+	});
+
+	it("normalises a Unicode dash alias and accepts it", async () => {
+		const { sessionId } = await seedSession(env.hello_cf_spa_db);
+		// U+2013 EN DASH should be converted to ASCII hyphen → "my-link"
+		const res = await call(
+			makeRequest(`${BASE}/api/links`, "POST", {
+				cookies: { sid: sessionId },
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ target_url: "https://example.com", alias: "my\u2013link" }),
+			})
+		);
+		expect(res.status).toBe(201);
+		const data = await res.json<{ short_code: string }>();
+		expect(data.short_code).toBe("my-link");
+	});
+
+	it("falls back to auto-generated short code when alias is an empty string", async () => {
+		const { sessionId } = await seedSession(env.hello_cf_spa_db);
+		const res = await call(
+			makeRequest(`${BASE}/api/links`, "POST", {
+				cookies: { sid: sessionId },
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ target_url: "https://example.com", alias: "" }),
+			})
+		);
+		expect(res.status).toBe(201);
+		const data = await res.json<{ short_code: string }>();
+		// auto-generated codes are not equal to the empty string
+		expect(data.short_code.length).toBeGreaterThan(0);
+	});
+
+	it("returns 400 when alias is not a string (e.g. a number)", async () => {
+		const { sessionId } = await seedSession(env.hello_cf_spa_db);
+		const res = await call(
+			makeRequest(`${BASE}/api/links`, "POST", {
+				cookies: { sid: sessionId },
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ target_url: "https://example.com", alias: 42 }),
+			})
+		);
+		expect(res.status).toBe(400);
+	});
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1051,6 +1109,128 @@ describe("Input length limits on POST /api/links", () => {
 			})
 		);
 		expect(res.status).toBe(400);
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Alias validation regression – specific accepted / rejected values
+// Prevents regressions where valid aliases were incorrectly rejected,
+// or invalid aliases (uppercase, spaces) were silently accepted.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("Alias validation regression – POST /api/links", () => {
+
+	// ── Valid aliases ─────────────────────────────────────────────────────────
+
+	it('accepts "google3" (lowercase letters + digit)', async () => {
+		const { sessionId } = await seedSession(env.hello_cf_spa_db);
+		const res = await call(
+			makeRequest(`${BASE}/api/links`, "POST", {
+				cookies: { sid: sessionId },
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ target_url: "https://example.com", alias: "google3" }),
+			})
+		);
+		expect(res.status).toBe(201);
+		const data = await res.json<{ short_code: string }>();
+		expect(data.short_code).toBe("google3");
+	});
+
+	it('accepts "mein-link" (hyphen)', async () => {
+		const { sessionId } = await seedSession(env.hello_cf_spa_db);
+		const res = await call(
+			makeRequest(`${BASE}/api/links`, "POST", {
+				cookies: { sid: sessionId },
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ target_url: "https://example.com", alias: "mein-link" }),
+			})
+		);
+		expect(res.status).toBe(201);
+		const data = await res.json<{ short_code: string }>();
+		expect(data.short_code).toBe("mein-link");
+	});
+
+	it('accepts "mein_link" (underscore)', async () => {
+		const { sessionId } = await seedSession(env.hello_cf_spa_db);
+		const res = await call(
+			makeRequest(`${BASE}/api/links`, "POST", {
+				cookies: { sid: sessionId },
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ target_url: "https://example.com", alias: "mein_link" }),
+			})
+		);
+		expect(res.status).toBe(201);
+		const data = await res.json<{ short_code: string }>();
+		expect(data.short_code).toBe("mein_link");
+	});
+
+	// ── Invalid aliases ───────────────────────────────────────────────────────
+
+	it('rejects "Google3" (uppercase letter) with 400', async () => {
+		const { sessionId } = await seedSession(env.hello_cf_spa_db);
+		const res = await call(
+			makeRequest(`${BASE}/api/links`, "POST", {
+				cookies: { sid: sessionId },
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ target_url: "https://example.com", alias: "Google3" }),
+			})
+		);
+		expect(res.status).toBe(400);
+		const data = await res.json<{ error: string }>();
+		expect(data.error).toBeTruthy();
+	});
+
+	it('rejects "ab" (too short, < 3 chars) with 400', async () => {
+		const { sessionId } = await seedSession(env.hello_cf_spa_db);
+		const res = await call(
+			makeRequest(`${BASE}/api/links`, "POST", {
+				cookies: { sid: sessionId },
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ target_url: "https://example.com", alias: "ab" }),
+			})
+		);
+		expect(res.status).toBe(400);
+		const data = await res.json<{ error: string }>();
+		expect(data.error).toBeTruthy();
+	});
+
+	it('rejects "test link" (contains a space) with 400', async () => {
+		const { sessionId } = await seedSession(env.hello_cf_spa_db);
+		const res = await call(
+			makeRequest(`${BASE}/api/links`, "POST", {
+				cookies: { sid: sessionId },
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ target_url: "https://example.com", alias: "test link" }),
+			})
+		);
+		expect(res.status).toBe(400);
+		const data = await res.json<{ error: string }>();
+		expect(data.error).toBeTruthy();
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Frontend pattern regression (public/app.html)
+// Reads the HTML file statically and asserts the pattern attribute value.
+// Prevents silent regressions back to the broken pattern variants.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("Frontend alias pattern regression (app.html)", () => {
+	// public/app.html is read at config time (Node.js, no Windows path issues)
+	// and injected into the test environment as env.APP_HTML_CONTENT.
+
+	it('uses the browser-safe pattern pattern="[-a-z0-9_]{3,50}"', () => {
+		expect(env.APP_HTML_CONTENT).toContain('pattern="[-a-z0-9_]{3,50}"');
+	});
+
+	it('does NOT use the hyphen-at-end variant pattern="[a-z0-9_-]{3,50}"', () => {
+		// This variant causes "Invalid character class" in browsers with the v-flag.
+		expect(env.APP_HTML_CONTENT).not.toContain('pattern="[a-z0-9_-]{3,50}"');
+	});
+
+	it('does NOT use the mid-escaped variant pattern="[a-z0-9_\\-]{3,50}"', () => {
+		// This was the original broken pattern that triggered the regression.
+		expect(env.APP_HTML_CONTENT).not.toContain('pattern="[a-z0-9_\\-]{3,50}"');
 	});
 });
 
