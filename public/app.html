@@ -59,7 +59,7 @@
 				<div class="field">
 					<label for="f-alias">Alias (optional)</label>
 					<input type="text" id="f-alias" name="alias" placeholder="mein-link"
-						pattern="[-a-z0-9_]{3,50}" title="3–50 Zeichen: nur Kleinbuchstaben (a–z), Ziffern, Bindestrich (-), Unterstrich (_)" />
+						pattern="[a-z0-9_\-]{3,50}" title="3–50 Zeichen: nur Kleinbuchstaben (a–z), Ziffern, Bindestrich (-), Unterstrich (_)" />
 				</div>
 			</div>
 			<div class="field">
@@ -116,6 +116,22 @@
 		}
 	}
 
+	async function deleteLink(id) {
+		const resp = await fetch(`/api/links/${id}/delete`, { method: "POST" });
+		if (resp.ok) {
+			await loadLinks();
+		} else if (resp.status === 401) {
+			window.location.href = "/login";
+		} else {
+			const data = await resp.json().catch(() => ({}));
+			const statusEl = document.getElementById("links-status");
+			if (statusEl) {
+				statusEl.textContent = "Fehler: " + (data.error ?? resp.statusText);
+				statusEl.className = "error";
+			}
+		}
+	}
+
 	async function loadLinks() {
 		const list = document.getElementById("links-list");
 		const statusEl = document.getElementById("links-status");
@@ -140,6 +156,7 @@
 						<button class="btn-sm" onclick="toggleLink('${esc(l.id)}', !!${l.is_active})">
 							${l.is_active ? "Deaktivieren" : "Aktivieren"}
 						</button>
+						<button class="btn-sm" onclick="deleteLink('${esc(l.id)}')">Löschen</button>
 					</div>
 					<div class="link-short">
 						<a href="${esc(l.short_url)}" target="_blank" rel="noopener">${esc(l.short_url)}</a>

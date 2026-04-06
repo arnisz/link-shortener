@@ -773,6 +773,41 @@ export default {
 			);
 		}
 
+		// ── POST /api/links/:id/delete – permanently delete a link ───────────
+
+		const deleteLinkMatch = url.pathname.match(/^\/api\/links\/([^/]+)\/delete$/);
+		if (deleteLinkMatch && request.method === "POST") {
+			const linkId = deleteLinkMatch[1];
+			const user = await getSessionUser(request, env);
+			if (!user) {
+				return new Response(JSON.stringify({ error: "Unauthorized" }), {
+					status: 401,
+					headers: { "content-type": "application/json; charset=UTF-8" }
+				});
+			}
+
+			// Verify ownership before deleting
+			const owned = await env.hello_cf_spa_db
+				.prepare("SELECT id FROM links WHERE id = ? AND user_id = ?")
+				.bind(linkId, user.id)
+				.first<{ id: string }>();
+			if (!owned) {
+				return new Response(JSON.stringify({ error: "Link not found" }), {
+					status: 404,
+					headers: { "content-type": "application/json; charset=UTF-8" }
+				});
+			}
+
+			await env.hello_cf_spa_db
+				.prepare("DELETE FROM links WHERE id = ? AND user_id = ?")
+				.bind(linkId, user.id)
+				.run();
+
+			return new Response(JSON.stringify({ ok: true }), {
+				headers: { "content-type": "application/json; charset=UTF-8" }
+			});
+		}
+
 		// ── GET /r/:code – redirect short link ───────────────────────────────
 		// Pattern includes hyphen + underscore to support custom aliases.
 

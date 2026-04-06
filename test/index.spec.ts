@@ -1219,18 +1219,99 @@ describe("Frontend alias pattern regression (app.html)", () => {
 	// public/app.html is read at config time (Node.js, no Windows path issues)
 	// and injected into the test environment as env.APP_HTML_CONTENT.
 
-	it('uses the browser-safe pattern pattern="[-a-z0-9_]{3,50}"', () => {
-		expect(env.APP_HTML_CONTENT).toContain('pattern="[-a-z0-9_]{3,50}"');
+	it('uses the v-flag-safe escaped-hyphen pattern pattern="[a-z0-9_\\-]{3,50}"', () => {
+		// Chrome 146+ uses the v-flag (Unicode Sets Mode) for HTML pattern validation.
+		// In v-flag mode, `-` is a syntax character and MUST be escaped as \- inside
+		// character classes. This is the only form that works in all browsers.
+		expect(env.APP_HTML_CONTENT).toContain('pattern="[a-z0-9_\\-]{3,50}"');
 	});
 
 	it('does NOT use the hyphen-at-end variant pattern="[a-z0-9_-]{3,50}"', () => {
-		// This variant causes "Invalid character class" in browsers with the v-flag.
+		// Invalid in v-flag mode: unescaped hyphen at the end of a character class.
 		expect(env.APP_HTML_CONTENT).not.toContain('pattern="[a-z0-9_-]{3,50}"');
 	});
 
-	it('does NOT use the mid-escaped variant pattern="[a-z0-9_\\-]{3,50}"', () => {
-		// This was the original broken pattern that triggered the regression.
-		expect(env.APP_HTML_CONTENT).not.toContain('pattern="[a-z0-9_\\-]{3,50}"');
+	it('does NOT use the hyphen-at-start variant pattern="[-a-z0-9_]{3,50}"', () => {
+		// Also invalid in Chrome 146+ v-flag mode: unescaped hyphen at the start.
+		expect(env.APP_HTML_CONTENT).not.toContain('pattern="[-a-z0-9_]{3,50}"');
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/links/:id/delete
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("POST /api/links/:id/delete", () => {
+	it("returns 401 when unauthenticated", async () => {
+		const res = await call(
+			makeRequest(`${BASE}/api/links/some-id/delete`, "POST")
+		);
+		expect(res.status).toBe(401);
+	});
+
+	it("returns 404 when trying to delete another user's link", async () => {
+		const { userId } = await seedSession(env.hello_cf_spa_db);
+		const { sessionId: otherSession } = await seedSession(env.hello_cf_spa_db, {
+			userId: "other-user-del01",
+			email: "other-del01@example.com",
+			googleSub: "google-sub-del01",
+		});
+		const { id } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "del-owner" });
+
+		const res = await call(
+			makeRequest(`${BASE}/api/links/${id}/delete`, "POST", {
+				cookies: { sid: otherSession },
+			})
+		);
+		expect(res.status).toBe(404);
+	});
+
+	it("deletes the link and returns { ok: true }", async () => {
+		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
+		const { id } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "del-ok" });
+
+		const res = await call(
+			makeRequest(`${BASE}/api/links/${id}/delete`, "POST", {
+				cookies: { sid: sessionId },
+			})
+		);
+		expect(res.status).toBe(200);
+		const data = await res.json<{ ok: boolean }>();
+		expect(data.ok).toBe(true);
+	});
+
+	it("deleted link is removed from the database", async () => {
+		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
+		const { id } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "del-db" });
+
+		await call(
+			makeRequest(`${BASE}/api/links/${id}/delete`, "POST", {
+				cookies: { sid: sessionId },
+			})
+		);
+
+		const row = await env.hello_cf_spa_db
+			.prepare("SELECT id FROM links WHERE id = ?")
+			.bind(id)
+			.first();
+		expect(row).toBeNull();
+	});
+
+	it("deleted link no longer appears in GET /api/links", async () => {
+		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
+		const { id } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "del-list" });
+
+		await call(
+			makeRequest(`${BASE}/api/links/${id}/delete`, "POST", {
+				cookies: { sid: sessionId },
+			})
+		);
+
+		const listRes = await call(
+			makeRequest(`${BASE}/api/links`, "GET", { cookies: { sid: sessionId } })
+		);
+		const links = await listRes.json<{ id: string }[]>();
+		expect(links.find(l => l.id === id)).toBeUndefined();
 	});
 });
 
