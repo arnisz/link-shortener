@@ -26,3 +26,14 @@ This project serves as a solid starting point for:
 - Future extensions like analytics, API access, or browser integrations
 
 The current state represents a hardened MVP that is safe to deploy and operate.
+
+## License
+
+This project is licensed under the **GNU General Public License v3 (GPLv3)**.
+
+See [LICENSE](./LICENSE) for the full license text.
+
+See [COPYRIGHT](./COPYRIGHT) for copyright notices and third-party dependency licenses.
+
+© 2024–2026 Arnold Szathmary & Contributors
+

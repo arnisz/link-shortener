@@ -1,0 +1,61 @@
+YAQQ – Link Shortener (Cloudflare Workers Edition)
+Copyright © 2024–2026 Arnold Szathmary & Contributors
+
+All source code in this repository is licensed under the GNU General Public
+License, version 3 (GPLv3). See the LICENSE file for the full license text.
+
+Contributions
+═════════════
+
+This project welcomes contributions. By submitting a pull request, you agree
+that your contributions will be licensed under the same GPLv3 license.
+
+Third-Party Dependencies
+════════════════════════
+
+The following third-party libraries and services are used:
+
+- Cloudflare Workers Runtime
+  License: Proprietary (Cloudflare)
+  URL: https://developers.cloudflare.com/workers/
+
+- Cloudflare D1 (SQLite)
+  License: Proprietary (Cloudflare)
+  URL: https://developers.cloudflare.com/d1/
+
+- Google OAuth 2.0
+  License: Proprietary (Google)
+  URL: https://developers.google.com/identity
+
+- Node.js (development only)
+  License: MIT
+  URL: https://nodejs.org/
+
+- Vitest (testing only)
+  License: MIT
+  URL: https://vitest.dev/
+
+- Wrangler CLI (development only)
+  License: Apache 2.0 / MIT
+  URL: https://github.com/cloudflare/workers-sdk
+
+Patents
+═══════
+
+This software is distributed under the GPLv3 license. For information about
+patent grants and limitations, please refer to the LICENSE file, specifically
+sections 10 and 11.
+
+Trademarks
+══════════
+
+"Cloudflare" and "Google" are registered trademarks of their respective owners.
+Other trademarks mentioned in this code or documentation are the property of
+their respective owners.
+
+Warranty Disclaimer
+═══════════════════
+
+This software is provided "AS IS" without warranty of any kind, express or
+implied. See the LICENSE file for complete details.
+
