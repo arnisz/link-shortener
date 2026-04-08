@@ -15,12 +15,12 @@
 	},
 	"routes": [
 		{
-			"pattern": "app.yaqq.eu",
+			"pattern": "aadd.li",
 			"custom_domain": true
 		}
 	],
 	"vars": {
-		"APP_BASE_URL": "https://app.yaqq.eu"
+		"APP_BASE_URL": "https://aadd.li"
 	},
 	"upload_source_maps": true,
 	"compatibility_flags": [

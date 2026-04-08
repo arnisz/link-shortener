@@ -1219,20 +1219,21 @@ describe("Frontend alias pattern regression (app.html)", () => {
 	// public/app.html is read at config time (Node.js, no Windows path issues)
 	// and injected into the test environment as env.APP_HTML_CONTENT.
 
-	it('uses the v-flag-safe escaped-hyphen pattern pattern="[a-z0-9_\\-]{3,50}"', () => {
-		// Chrome 146+ uses the v-flag (Unicode Sets Mode) for HTML pattern validation.
-		// In v-flag mode, `-` is a syntax character and MUST be escaped as \- inside
-		// character classes. This is the only form that works in all browsers.
-		expect(env.APP_HTML_CONTENT).toContain('pattern="[a-z0-9_\\-]{3,50}"');
+	it('uses the correct pattern pattern="[a-z0-9_-]{3,50}"', () => {
+		// Hyphen at the end of a character class is unambiguous and does not
+		// need escaping. This matches the backend ALIAS_REGEX validation rule
+		// and works correctly in all modern browsers.
+		expect(env.APP_HTML_CONTENT).toContain('pattern="[a-z0-9_-]{3,50}"');
 	});
 
-	it('does NOT use the hyphen-at-end variant pattern="[a-z0-9_-]{3,50}"', () => {
-		// Invalid in v-flag mode: unescaped hyphen at the end of a character class.
-		expect(env.APP_HTML_CONTENT).not.toContain('pattern="[a-z0-9_-]{3,50}"');
+	it('does NOT use the broken escaped-hyphen variant pattern="[a-z0-9_\\-]{3,50}"', () => {
+		// This variant caused browser validation errors in Chrome 146+.
+		// It has been fixed and should not appear in the HTML.
+		expect(env.APP_HTML_CONTENT).not.toContain('pattern="[a-z0-9_\\-]{3,50}"');
 	});
 
 	it('does NOT use the hyphen-at-start variant pattern="[-a-z0-9_]{3,50}"', () => {
-		// Also invalid in Chrome 146+ v-flag mode: unescaped hyphen at the start.
+		// Incorrect ordering; the correct form places hyphen at the end.
 		expect(env.APP_HTML_CONTENT).not.toContain('pattern="[-a-z0-9_]{3,50}"');
 	});
 });
