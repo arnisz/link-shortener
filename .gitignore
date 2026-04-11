@@ -5,6 +5,9 @@
 *.sqlite-shm
 *.sqlite-wal
 
+#keyword datenbank
+spam-keywords-extended.sql
+
 #Windows Trash
 .DS_Store
 Thumbs.db

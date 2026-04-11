@@ -1,0 +1,262 @@
+/* ── Full-viewport centering ── */
+body {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	min-height: 100vh;
+	margin: 0;
+}
+
+/* ── Hero container ── */
+.hero {
+	width: 100%;
+	max-width: 560px;
+	padding: 3rem 1.5rem;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 1.5rem;
+	box-sizing: border-box;
+	text-align: center;
+}
+
+/* ── Brand ── */
+.brand {
+	font-size: 2rem;
+	font-weight: 800;
+	letter-spacing: -0.04em;
+	color: #2563eb;
+	line-height: 1;
+}
+
+/* ── Heading ── */
+.hero h1 {
+	font-size: clamp(2rem, 5vw, 2.8rem);
+	font-weight: 600;
+	line-height: 1.2;
+	margin: 0;
+	color: #111827;
+}
+
+/* ── Subline ── */
+.subline {
+	font-size: 1.05rem;
+	color: #6b7280;
+	max-width: 460px;
+	margin: 0;
+	line-height: 1.65;
+}
+
+/* ── Form wrapper ── */
+#anon-form-wrap {
+	width: 100%;
+	margin: 0;
+}
+
+/* ── Shortener form: pill shape on desktop ── */
+.shortener-form {
+	display: flex;
+	width: 100%;
+	border-radius: 999px;
+	box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+	overflow: hidden;
+}
+
+.shortener-form #anon-url {
+	flex: 1;
+	min-width: 0;
+	padding: 0.85rem 1.1rem;
+	font-size: 1rem;
+	border: 1px solid #e5e7eb;
+	border-right: none;
+	border-radius: 999px 0 0 999px;
+	outline: none;
+	background: #fff;
+	color: #111827;
+	box-sizing: border-box;
+	font-family: inherit;
+}
+
+.shortener-form #anon-url:focus {
+	border-color: #93c5fd;
+}
+
+.shortener-form #anon-submit {
+	padding: 0.85rem 1.5rem;
+	font-size: 1rem;
+	font-weight: 600;
+	background: #2563eb;
+	color: #fff;
+	border: none;
+	border-radius: 0 999px 999px 0;
+	cursor: pointer;
+	white-space: nowrap;
+	transition: background 0.15s;
+	font-family: inherit;
+}
+
+.shortener-form #anon-submit:hover {
+	background: #1d4ed8;
+}
+
+.shortener-form #anon-submit:disabled {
+	background: #93c5fd;
+	cursor: default;
+}
+
+/* ── Result box ── */
+#anon-result {
+	margin-top: 0.75rem;
+	display: none;
+}
+
+#anon-result:not(.error) #anon-success:not([hidden]) {
+	padding: 1rem 1.25rem;
+	background: #f0fdf4;
+	border: 1px solid #bbf7d0;
+	border-radius: 12px;
+}
+
+#anon-short-url {
+	display: block;
+	font-family: monospace;
+	font-size: 1.1rem;
+	font-weight: 700;
+	color: #166534;
+	word-break: break-all;
+	margin-bottom: 0.5rem;
+}
+
+#anon-copy {
+	padding: 0.3rem 0.85rem;
+	font-size: 0.85rem;
+	cursor: pointer;
+	border-radius: 999px;
+	border: 1px solid #86efac;
+	background: #fff;
+	color: #166534;
+	transition: background 0.15s;
+	font-family: inherit;
+}
+
+#anon-copy:hover {
+	background: #dcfce7;
+}
+
+#anon-notice {
+	margin-top: 0.5rem;
+	font-size: 0.8rem;
+	color: #6b7280;
+}
+
+#anon-cta {
+	margin-top: 0.35rem;
+	font-size: 0.85rem;
+	color: #374151;
+}
+
+#anon-cta a {
+	color: #2563eb;
+	text-decoration: none;
+	font-weight: 500;
+}
+
+#anon-result.error {
+	padding: 0.85rem 1.1rem;
+	background: #fef2f2;
+	border: 1px solid #fecaca;
+	border-radius: 12px;
+}
+
+#anon-error-msg {
+	color: #dc2626;
+	font-size: 0.9rem;
+}
+
+/* ── Example ── */
+.example {
+	font-size: 0.85rem;
+	color: #9ca3af;
+	margin: 0;
+}
+
+/* ── Secondary actions ── */
+.secondary-actions {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 0.6rem;
+	margin-top: 0.25rem;
+}
+
+/* Google "G" SVG is inline, so we style the button as a flex row */
+.google-login {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.5rem;
+	padding: 0.6rem 1.25rem;
+	font-size: 0.9rem;
+	font-weight: 500;
+	background: #fff;
+	color: #374151;
+	border: 1px solid #d1d5db;
+	border-radius: 999px;
+	cursor: pointer;
+	transition: border-color 0.15s, box-shadow 0.15s;
+	font-family: inherit;
+}
+
+.google-login:hover {
+	border-color: #9ca3af;
+	box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+.hint {
+	font-size: 0.8rem;
+	color: #9ca3af;
+	margin: 0;
+}
+
+/* ── Footer ── */
+.footer-links {
+	margin-top: 0.5rem;
+}
+
+.footer-links a {
+	font-size: 0.8rem;
+	color: #9ca3af;
+	text-decoration: none;
+}
+
+.footer-links a:hover {
+	color: #6b7280;
+}
+
+/* ── Mobile: stack form elements ── */
+@media (max-width: 560px) {
+	.hero {
+		padding: 2.5rem 1.25rem;
+		gap: 1.25rem;
+	}
+
+	.shortener-form {
+		flex-direction: column;
+		border-radius: 12px;
+		overflow: visible;
+		box-shadow: none;
+		gap: 0.5rem;
+	}
+
+	.shortener-form #anon-url {
+		border: 1px solid #e5e7eb;
+		border-radius: 999px;
+		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.07);
+	}
+
+	.shortener-form #anon-submit {
+		border-radius: 999px;
+		width: 100%;
+		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.07);
+	}
+}
