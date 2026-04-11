@@ -1314,5 +1314,154 @@ describe("POST /api/links/:id/delete", () => {
 		const links = await listRes.json<{ id: string }[]>();
 		expect(links.find(l => l.id === id)).toBeUndefined();
 	});
+
+	it("returns 404 when trying to delete an already-deleted link", async () => {
+		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
+		const { id } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "del-twice" });
+
+		await call(makeRequest(`${BASE}/api/links/${id}/delete`, "POST", { cookies: { sid: sessionId } }));
+		const second = await call(makeRequest(`${BASE}/api/links/${id}/delete`, "POST", { cookies: { sid: sessionId } }));
+		expect(second.status).toBe(404);
+	});
+
+	it("deleted link is no longer reachable via redirect", async () => {
+		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
+		const { id, shortCode } = await seedLink(env.hello_cf_spa_db, {
+			userId,
+			shortCode: "del-redir",
+			targetUrl: "https://will-be-gone.example.com",
+		});
+
+		await call(makeRequest(`${BASE}/api/links/${id}/delete`, "POST", { cookies: { sid: sessionId } }));
+		const res = await call(makeRequest(`${BASE}/r/${shortCode}`));
+		expect(res.status).toBe(404);
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/links – additional edge cases
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("POST /api/links – additional edge cases", () => {
+	it("returns 400 for an ftp:// URL (only http/https accepted)", async () => {
+		const { sessionId } = await seedSession(env.hello_cf_spa_db);
+		const res = await call(
+			makeRequest(`${BASE}/api/links`, "POST", {
+				cookies: { sid: sessionId },
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ target_url: "ftp://files.example.com/file.txt" }),
+			})
+		);
+		expect(res.status).toBe(400);
+	});
+
+	it("returns 400 for a malformed (non-parseable) JSON body", async () => {
+		const { sessionId } = await seedSession(env.hello_cf_spa_db);
+		const res = await call(
+			makeRequest(`${BASE}/api/links`, "POST", {
+				cookies: { sid: sessionId },
+				headers: { "content-type": "application/json" },
+				body: "{not valid json",
+			})
+		);
+		expect(res.status).toBe(400);
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/links/:id/update – additional edge cases
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("POST /api/links/:id/update – additional edge cases", () => {
+	it("returns 400 for a syntactically valid but past ISO date as expires_at", async () => {
+		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
+		const { id } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "upd-pastiso" });
+		const past = new Date(Date.now() - 1000 * 60).toISOString(); // 1 minute ago
+
+		const res = await call(
+			makeRequest(`${BASE}/api/links/${id}/update`, "POST", {
+				cookies: { sid: sessionId },
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ expires_at: past }),
+			})
+		);
+		expect(res.status).toBe(400);
+	});
+
+	it("returns 400 for an invalid is_active value (non-boolean string)", async () => {
+		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
+		const { id } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "upd-badact" });
+
+		const res = await call(
+			makeRequest(`${BASE}/api/links/${id}/update`, "POST", {
+				cookies: { sid: sessionId },
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ is_active: "yes" }),
+			})
+		);
+		expect(res.status).toBe(400);
+	});
+
+	it("can update title and is_active together in one request", async () => {
+		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
+		const { id } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "upd-multi" });
+
+		const res = await call(
+			makeRequest(`${BASE}/api/links/${id}/update`, "POST", {
+				cookies: { sid: sessionId },
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ title: "Multi-Update", is_active: false }),
+			})
+		);
+		expect(res.status).toBe(200);
+		const data = await res.json<{ title: string; is_active: number }>();
+		expect(data.title).toBe("Multi-Update");
+		expect(data.is_active).toBe(0);
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /r/:code – additional edge cases
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("GET /r/:code – additional edge cases", () => {
+	it("redirects a link that has a future expires_at (not yet expired)", async () => {
+		const { userId } = await seedSession(env.hello_cf_spa_db);
+		const future = new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString(); // 24h from now
+		await seedLink(env.hello_cf_spa_db, {
+			userId,
+			shortCode: "notexpired1",
+			targetUrl: "https://still-valid.example.com",
+			expiresAt: future,
+		});
+
+		const res = await call(makeRequest(`${BASE}/r/notexpired1`));
+		expect(res.status).toBe(302);
+		expect(res.headers.get("location")).toBe("https://still-valid.example.com");
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/links – result ordering
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("GET /api/links – result ordering", () => {
+	it("returns links newest-first (by created_at DESC)", async () => {
+		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
+
+		// Insert with an explicit 1 ms gap so created_at values differ
+		await seedLink(env.hello_cf_spa_db, { userId, shortCode: "order-old" });
+		await new Promise(r => setTimeout(r, 5));
+		await seedLink(env.hello_cf_spa_db, { userId, shortCode: "order-new" });
+
+		const res = await call(
+			makeRequest(`${BASE}/api/links`, "GET", { cookies: { sid: sessionId } })
+		);
+		expect(res.status).toBe(200);
+		const links = await res.json<{ short_code: string }[]>();
+		expect(links).toHaveLength(2);
+		expect(links[0].short_code).toBe("order-new");
+		expect(links[1].short_code).toBe("order-old");
+	});
 });
 
