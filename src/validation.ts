@@ -44,3 +44,21 @@ export function requireJson(request: Request): boolean {
 	const ct = request.headers.get("content-type") ?? "";
 	return ct.includes("application/json");
 }
+
+// Module-level keyword cache: populated on first call, lives for the Worker lifetime.
+let spamKeywordCache: string[] | null = null;
+
+/**
+ * Returns true if the URL matches any spam keyword from the spam_keywords table.
+ * Keywords are matched case-insensitively via regex against the full URL string.
+ * The keyword list is cached in module scope (refreshed on cold start only).
+ */
+export async function checkSpamFilter(url: string, db: D1Database): Promise<boolean> {
+	if (!spamKeywordCache) {
+		const { results } = await db
+			.prepare("SELECT keyword FROM spam_keywords")
+			.all<{ keyword: string }>();
+		spamKeywordCache = results.map(r => r.keyword);
+	}
+	return spamKeywordCache.some(kw => new RegExp(kw, "i").test(url));
+}

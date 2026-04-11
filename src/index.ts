@@ -1,6 +1,6 @@
 import type { Env } from "./types";
 import { handleGetMe, handleLogout, handleLogin, handleGoogleCallback } from "./handlers/auth";
-import { handleCreateLink, handleGetLinks, handleUpdateLink, handleDeleteLink, handleRedirect } from "./handlers/links";
+import { handleCreateLink, handleGetLinks, handleUpdateLink, handleDeleteLink, handleRedirect, handleCreateAnonymousLink } from "./handlers/links";
 import { handleHello } from "./handlers/hello";
 
 export default {
@@ -13,6 +13,7 @@ export default {
 		if (pathname === "/api/me")                         return handleGetMe(request, env);
 		if (pathname === "/logout" && method === "POST")    return handleLogout(request, env);
 		if (pathname === "/api/hello")                      return handleHello(env);
+		if (pathname === "/api/links/anonymous" && method === "POST") return handleCreateAnonymousLink(request, env);
 		if (pathname === "/api/links" && method === "POST") return handleCreateLink(request, env);
 		if (pathname === "/api/links" && method === "GET")  return handleGetLinks(request, env);
 

@@ -3,7 +3,7 @@
 <head>
 	<meta charset="UTF-8" />
 	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-	<title>YAQQ – Link-Kürzer</title>
+	<title>aadd.li – Link-Kürzer</title>
 	<link rel="stylesheet" href="/style.css" />
 	<style>
 		input[type="url"], input[type="text"], input[type="datetime-local"] {
@@ -31,11 +31,15 @@
 		.btn-sm { padding: 4px 10px; font-size: 13px; cursor: pointer; border-radius: 5px; border: 1px solid #d1d5db; background: #f9fafb; }
 		hr { border: none; border-top: 1px solid #e5e7eb; margin: 24px 0; }
 		#links-list { margin-top: 8px; }
+	#links-spinner { display: flex; justify-content: center; padding: 12px 0; }
+	.spinner { width: 22px; height: 22px; border: 3px solid #e5e7eb; border-top-color: #2563eb; border-radius: 50%; animation: spin 0.7s linear infinite; }
+	@keyframes spin { to { transform: rotate(360deg); } }
+	#links-end { text-align: center; color: #6b7280; font-size: 13px; padding: 12px 0; }
 	</style>
 </head>
 <body>
 <main class="container">
-	<h1>YAQQ</h1>
+	<h1>aadd.li</h1>
 	<p id="status">Lade…</p>
 
 	<form id="logout-form" method="post" action="/logout" hidden>
@@ -73,6 +77,7 @@
 		<h2>Meine Links</h2>
 		<p id="links-status" style="min-height:1.2em;font-size:14px;"></p>
 		<div id="links-list"><em>Lade…</em></div>
+		<div id="links-spinner" hidden><div class="spinner"></div></div>
 	</section>
 </main>
 
@@ -94,6 +99,96 @@
 	function fmtDate(iso) {
 		if (!iso) return "";
 		return new Date(iso).toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" });
+	}
+
+	// ── Pagination state ───────────────────────────────────────────────────────
+	let _nextCursor = null;
+	let _isFetching = false;
+	let _observer = null;
+
+	function renderLink(l) {
+		return `
+			<div class="link-row">
+				<div class="link-head">
+					<strong>${esc(l.title || l.short_code)}</strong>
+					${linkBadge(l)}
+					<button class="btn-sm" onclick="toggleLink('${esc(l.id)}', !!${l.is_active})">
+						${l.is_active ? "Deaktivieren" : "Aktivieren"}
+					</button>
+					<button class="btn-sm" onclick="deleteLink('${esc(l.id)}')">Löschen</button>
+				</div>
+				<div class="link-short">
+					<a href="${esc(l.short_url)}" target="_blank" rel="noopener">${esc(l.short_url)}</a>
+				</div>
+				<div class="link-meta">→ ${esc(l.target_url)}</div>
+				<div class="link-meta">
+					${l.click_count} Klick${l.click_count !== 1 ? "s" : ""}
+					&middot; Erstellt: ${fmtDate(l.created_at)}
+					${l.expires_at ? "&middot; Läuft ab: " + fmtDate(l.expires_at) : ""}
+				</div>
+			</div>
+		`;
+	}
+
+	async function fetchLinks(cursor, limit) {
+		const params = new URLSearchParams({ limit: String(limit) });
+		if (cursor) params.set("cursor", cursor);
+		const resp = await fetch(`/api/links?${params}`);
+		if (resp.status === 401) throw Object.assign(new Error("Unauthorized"), { status: 401 });
+		if (!resp.ok) throw new Error("Fehler beim Laden der Links.");
+		return resp.json();
+	}
+
+	function teardownObserver() {
+		if (_observer) { _observer.disconnect(); _observer = null; }
+	}
+
+	function setupSentinel(list) {
+		teardownObserver();
+		const sentinel = document.createElement("div");
+		sentinel.id = "links-sentinel";
+		list.appendChild(sentinel);
+
+		_observer = new IntersectionObserver(async (entries) => {
+			if (!entries[0].isIntersecting || _isFetching || !_nextCursor) return;
+			_isFetching = true;
+			const spinner = document.getElementById("links-spinner");
+			if (spinner) spinner.hidden = false;
+			try {
+				const data = await fetchLinks(_nextCursor, 10);
+				_nextCursor = data.nextCursor;
+				const s = document.getElementById("links-sentinel");
+				if (s) s.insertAdjacentHTML("beforebegin", data.links.map(renderLink).join(""));
+				if (!_nextCursor) {
+					teardownObserver();
+					if (s) s.remove();
+					appendEndMessage(list);
+				}
+			} catch (err) {
+				const statusEl = document.getElementById("links-status");
+				if (statusEl) {
+					statusEl.textContent = err.status === 401
+						? 'Sitzung abgelaufen. Bitte neu anmelden.'
+						: (err.message || "Fehler beim Laden weiterer Links.");
+					statusEl.className = "error";
+				}
+				if (err.status === 401) window.location.href = "/login";
+			} finally {
+				_isFetching = false;
+				const spinner = document.getElementById("links-spinner");
+				if (spinner) spinner.hidden = true;
+			}
+		}, { rootMargin: "200px" });
+
+		_observer.observe(sentinel);
+	}
+
+	function appendEndMessage(list) {
+		if (document.getElementById("links-end")) return;
+		const el = document.createElement("p");
+		el.id = "links-end";
+		el.textContent = "Alle Links geladen";
+		list.appendChild(el);
 	}
 
 	async function toggleLink(id, currentIsActive) {
@@ -133,44 +228,35 @@
 	}
 
 	async function loadLinks() {
+		teardownObserver();
+		_nextCursor = null;
+		_isFetching = false;
 		const list = document.getElementById("links-list");
 		const statusEl = document.getElementById("links-status");
 		if (statusEl) { statusEl.textContent = ""; statusEl.className = ""; }
+		list.innerHTML = "<em>Lade…</em>";
 		try {
-			const resp = await fetch("/api/links");
-			if (resp.status === 401) {
-				list.innerHTML = 'Sitzung abgelaufen. <a href="/login">Bitte neu anmelden.</a>';
-				return;
-			}
-			if (!resp.ok) { list.textContent = "Fehler beim Laden der Links."; return; }
-			const links = await resp.json();
-			if (!links.length) {
+			_isFetching = true;
+			const data = await fetchLinks(null, 50);
+			_isFetching = false;
+			_nextCursor = data.nextCursor;
+			if (!data.links.length) {
 				list.innerHTML = "<em>Noch keine Links – erstelle deinen ersten!</em>";
 				return;
 			}
-			list.innerHTML = links.map(l => `
-				<div class="link-row">
-					<div class="link-head">
-						<strong>${esc(l.title || l.short_code)}</strong>
-						${linkBadge(l)}
-						<button class="btn-sm" onclick="toggleLink('${esc(l.id)}', !!${l.is_active})">
-							${l.is_active ? "Deaktivieren" : "Aktivieren"}
-						</button>
-						<button class="btn-sm" onclick="deleteLink('${esc(l.id)}')">Löschen</button>
-					</div>
-					<div class="link-short">
-						<a href="${esc(l.short_url)}" target="_blank" rel="noopener">${esc(l.short_url)}</a>
-					</div>
-					<div class="link-meta">→ ${esc(l.target_url)}</div>
-					<div class="link-meta">
-						${l.click_count} Klick${l.click_count !== 1 ? "s" : ""}
-						&middot; Erstellt: ${fmtDate(l.created_at)}
-						${l.expires_at ? "&middot; Läuft ab: " + fmtDate(l.expires_at) : ""}
-					</div>
-				</div>
-			`).join("");
+			list.innerHTML = data.links.map(renderLink).join("");
+			if (_nextCursor) {
+				setupSentinel(list);
+			} else {
+				appendEndMessage(list);
+			}
 		} catch (err) {
-			list.textContent = String(err);
+			_isFetching = false;
+			if (err.status === 401) {
+				list.innerHTML = 'Sitzung abgelaufen. <a href="/login">Bitte neu anmelden.</a>';
+			} else {
+				list.textContent = err.message || "Fehler beim Laden der Links.";
+			}
 		}
 	}
 

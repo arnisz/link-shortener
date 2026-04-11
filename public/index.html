@@ -3,14 +3,51 @@
 <head>
 	<meta charset="UTF-8" />
 	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-	<title>YAQQ – Link-Kürzer</title>
+	<title>aadd.li – dein Link-Kürzer</title>
 	<link rel="stylesheet" href="/style.css" />
+	<style>
+		#anon-form-wrap { margin-top: 1.5em; }
+		#anon-form { display: flex; gap: 8px; flex-wrap: wrap; }
+		#anon-url { flex: 1; min-width: 200px; padding: 9px 12px; font-size: 15px;
+			border: 1px solid #d1d5db; border-radius: 6px; box-sizing: border-box; }
+		#anon-submit { padding: 9px 18px; font-size: 15px; cursor: pointer;
+			border-radius: 6px; border: none; background: #2563eb; color: #fff; white-space: nowrap; }
+		#anon-submit:disabled { background: #93c5fd; cursor: default; }
+		#anon-result { margin-top: 14px; padding: 14px 16px; border-radius: 8px;
+			background: #f0f9ff; border: 1px solid #bae6fd; display: none; }
+		#anon-result.error { background: #fef2f2; border-color: #fecaca; }
+		#anon-short-url { font-family: monospace; font-size: 16px; font-weight: 700;
+			word-break: break-all; color: #1e40af; }
+		#anon-copy { margin-left: 8px; padding: 3px 10px; font-size: 13px; cursor: pointer;
+			border-radius: 5px; border: 1px solid #bae6fd; background: #fff; }
+		#anon-notice { margin-top: 6px; font-size: 13px; color: #6b7280; }
+		#anon-cta { margin-top: 8px; font-size: 13px; }
+		#anon-error-msg { color: #dc2626; font-size: 14px; }
+	</style>
 </head>
 <body>
 <main class="container">
-	<h1>YAQQ</h1>
+	<h1>aadd.li</h1>
 	<p>Dein minimaler Link-Kürzer. URLs kürzen, teilen und verwalten.</p>
-	<p id="landing-action">
+
+	<div id="anon-form-wrap">
+		<form id="anon-form">
+			<input type="url" id="anon-url" placeholder="https://example.com/langer-link" required autocomplete="off" />
+			<button type="submit" id="anon-submit">Kürzen</button>
+		</form>
+
+		<div id="anon-result">
+			<div id="anon-error-msg"></div>
+			<div id="anon-success" hidden>
+				<span id="anon-short-url"></span>
+				<button id="anon-copy" type="button">Kopieren</button>
+				<div id="anon-notice">Dieser Link läuft in 48 Stunden ab.</div>
+				<div id="anon-cta">Dauerhaft speichern? <a href="/login">Jetzt anmelden →</a></div>
+			</div>
+		</div>
+	</div>
+
+	<p id="landing-action" style="margin-top:1.5em;">
 		<a href="/login"><button type="button">Mit Google anmelden</button></a>
 	</p>
 	<p id="landing-status" style="font-size:14px;color:#6b7280;"></p>
@@ -26,6 +63,71 @@
 			}
 		})
 		.catch(() => { /* network error – stay on landing */ });
+
+	const form       = document.getElementById("anon-form");
+	const urlInput   = document.getElementById("anon-url");
+	const submitBtn  = document.getElementById("anon-submit");
+	const resultDiv  = document.getElementById("anon-result");
+	const errorMsg   = document.getElementById("anon-error-msg");
+	const successDiv = document.getElementById("anon-success");
+	const shortUrlEl = document.getElementById("anon-short-url");
+	const copyBtn    = document.getElementById("anon-copy");
+
+	function showError(msg) {
+		resultDiv.style.display = "block";
+		resultDiv.classList.add("error");
+		errorMsg.textContent = msg;
+		successDiv.hidden = true;
+	}
+
+	function showSuccess(shortUrl) {
+		resultDiv.style.display = "block";
+		resultDiv.classList.remove("error");
+		errorMsg.textContent = "";
+		shortUrlEl.textContent = shortUrl;
+		successDiv.hidden = false;
+	}
+
+	form.addEventListener("submit", async (e) => {
+		e.preventDefault();
+		submitBtn.disabled = true;
+		resultDiv.style.display = "none";
+		successDiv.hidden = true;
+
+		try {
+			const resp = await fetch("/api/links/anonymous", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ target_url: urlInput.value.trim() }),
+			});
+			const data = await resp.json().catch(() => ({}));
+
+			if (resp.ok) {
+				showSuccess(data.short_url);
+				urlInput.value = "";
+			} else if (resp.status === 429) {
+				showError("Zu viele Anfragen. Bitte warte eine Minute.");
+			} else if (resp.status === 422) {
+				showError("Diese URL wurde als Spam erkannt und kann nicht gekürzt werden.");
+			} else {
+				showError(data.error ?? "Ein Fehler ist aufgetreten. Bitte versuche es erneut.");
+			}
+		} catch {
+			showError("Netzwerkfehler. Bitte versuche es erneut.");
+		} finally {
+			submitBtn.disabled = false;
+		}
+	});
+
+	copyBtn.addEventListener("click", () => {
+		const url = shortUrlEl.textContent;
+		navigator.clipboard.writeText(url).then(() => {
+			copyBtn.textContent = "Kopiert!";
+			setTimeout(() => { copyBtn.textContent = "Kopieren"; }, 2000);
+		}).catch(() => {
+			copyBtn.textContent = "Kopieren";
+		});
+	});
 </script>
 </body>
 </html>

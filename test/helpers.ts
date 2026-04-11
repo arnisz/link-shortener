@@ -148,7 +148,7 @@ export async function setupLinksTable(db: D1Database): Promise<void> {
 		.prepare(
 			`CREATE TABLE IF NOT EXISTS links (` +
 			`id TEXT PRIMARY KEY, ` +
-			`user_id TEXT NOT NULL, ` +
+			`user_id TEXT, ` + // nullable: NULL for anonymous links
 			`short_code TEXT NOT NULL UNIQUE, ` +
 			`target_url TEXT NOT NULL, ` +
 			`title TEXT, ` +
@@ -207,3 +207,43 @@ export async function seedLink(
 	return { id, shortCode };
 }
 
+// ── Spam filter table setup ───────────────────────────────────────────────────
+
+/**
+ * Creates the spam_keywords table and seeds it with test keywords.
+ */
+export async function setupSpamTable(db: D1Database): Promise<void> {
+	await db
+		.prepare(
+			`CREATE TABLE IF NOT EXISTS spam_keywords (` +
+			`id INTEGER PRIMARY KEY AUTOINCREMENT, ` +
+			`keyword TEXT NOT NULL UNIQUE COLLATE NOCASE, ` +
+			`created_at TEXT NOT NULL DEFAULT (datetime('now')))`
+		)
+		.run();
+
+	const keywords = ["sex", "porn", "viagra", "casino", "crypto", "free-money", "OnlyFans", "nude", "xxx"];
+	for (const kw of keywords) {
+		await db
+			.prepare("INSERT OR IGNORE INTO spam_keywords (keyword) VALUES (?)")
+			.bind(kw)
+			.run();
+	}
+}
+
+// ── Rate limit table setup ────────────────────────────────────────────────────
+
+/**
+ * Creates the rate_limits table used by the anonymous link endpoint.
+ */
+export async function setupRateLimitTable(db: D1Database): Promise<void> {
+	await db
+		.prepare(
+			`CREATE TABLE IF NOT EXISTS rate_limits (` +
+			`ip TEXT NOT NULL, ` +
+			`window_start TEXT NOT NULL, ` +
+			`count INTEGER NOT NULL DEFAULT 0, ` +
+			`PRIMARY KEY (ip, window_start))`
+		)
+		.run();
+}

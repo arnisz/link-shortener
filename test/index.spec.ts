@@ -543,14 +543,15 @@ describe("GET /api/links", () => {
 		expect(res.status).toBe(401);
 	});
 
-	it("returns an empty array when the user has no links", async () => {
+	it("returns an empty links array when the user has no links", async () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "GET", { cookies: { sid: sessionId } })
 		);
 		expect(res.status).toBe(200);
-		const data = await res.json<unknown[]>();
-		expect(data).toEqual([]);
+		const data = await res.json<{ links: unknown[]; nextCursor: string | null }>();
+		expect(data.links).toEqual([]);
+		expect(data.nextCursor).toBeNull();
 	});
 
 	it("returns only links belonging to the current user", async () => {
@@ -568,9 +569,9 @@ describe("GET /api/links", () => {
 			makeRequest(`${BASE}/api/links`, "GET", { cookies: { sid: sessionId } })
 		);
 		expect(res.status).toBe(200);
-		const links = await res.json<{ short_code: string }[]>();
-		expect(links).toHaveLength(1);
-		expect(links[0].short_code).toBe("mine001");
+		const data = await res.json<{ links: { short_code: string }[]; nextCursor: string | null }>();
+		expect(data.links).toHaveLength(1);
+		expect(data.links[0].short_code).toBe("mine001");
 	});
 
 	it("includes short_url in each result", async () => {
@@ -580,8 +581,8 @@ describe("GET /api/links", () => {
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "GET", { cookies: { sid: sessionId } })
 		);
-		const links = await res.json<{ short_url: string }[]>();
-		expect(links[0].short_url).toContain("/r/urltest1");
+		const data = await res.json<{ links: { short_url: string }[] }>();
+		expect(data.links[0].short_url).toContain("/r/urltest1");
 	});
 });
 
@@ -865,11 +866,11 @@ describe("GET /api/links – Phase 2", () => {
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "GET", { cookies: { sid: sessionId } })
 		);
-		const links = await res.json<{ expires_at: unknown; is_active: unknown }[]>();
-		expect("expires_at" in links[0]).toBe(true);
-		expect("is_active"  in links[0]).toBe(true);
-		expect(links[0].is_active).toBe(1);
-		expect(links[0].expires_at).toBeNull();
+		const data = await res.json<{ links: { expires_at: unknown; is_active: unknown }[] }>();
+		expect("expires_at" in data.links[0]).toBe(true);
+		expect("is_active"  in data.links[0]).toBe(true);
+		expect(data.links[0].is_active).toBe(1);
+		expect(data.links[0].expires_at).toBeNull();
 	});
 });
 
@@ -1311,8 +1312,8 @@ describe("POST /api/links/:id/delete", () => {
 		const listRes = await call(
 			makeRequest(`${BASE}/api/links`, "GET", { cookies: { sid: sessionId } })
 		);
-		const links = await listRes.json<{ id: string }[]>();
-		expect(links.find(l => l.id === id)).toBeUndefined();
+		const data = await listRes.json<{ links: { id: string }[] }>();
+		expect(data.links.find(l => l.id === id)).toBeUndefined();
 	});
 
 	it("returns 404 when trying to delete an already-deleted link", async () => {
@@ -1458,10 +1459,145 @@ describe("GET /api/links – result ordering", () => {
 			makeRequest(`${BASE}/api/links`, "GET", { cookies: { sid: sessionId } })
 		);
 		expect(res.status).toBe(200);
-		const links = await res.json<{ short_code: string }[]>();
-		expect(links).toHaveLength(2);
-		expect(links[0].short_code).toBe("order-new");
-		expect(links[1].short_code).toBe("order-old");
+		const data = await res.json<{ links: { short_code: string }[] }>();
+		expect(data.links).toHaveLength(2);
+		expect(data.links[0].short_code).toBe("order-new");
+		expect(data.links[1].short_code).toBe("order-old");
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/links – cursor-based pagination
+// ─────────────────────────────────────────────────────────────────────────────
+
+type LinkPage = { links: { id: string; short_code: string; created_at: string }[]; nextCursor: string | null };
+
+describe("GET /api/links – cursor-based pagination", () => {
+	it("nextCursor is null when all results fit in one page", async () => {
+		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
+		await seedLink(env.hello_cf_spa_db, { userId, shortCode: "pag-single" });
+
+		const res = await call(
+			makeRequest(`${BASE}/api/links?limit=10`, "GET", { cookies: { sid: sessionId } })
+		);
+		expect(res.status).toBe(200);
+		const data = await res.json<LinkPage>();
+		expect(data.links).toHaveLength(1);
+		expect(data.nextCursor).toBeNull();
+	});
+
+	it("nextCursor is set when results exceed the limit", async () => {
+		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
+
+		// Insert 3 links with distinct created_at values
+		for (let i = 0; i < 3; i++) {
+			await seedLink(env.hello_cf_spa_db, { userId, shortCode: `pag-over-${i}` });
+			await new Promise(r => setTimeout(r, 5));
+		}
+
+		const res = await call(
+			makeRequest(`${BASE}/api/links?limit=2`, "GET", { cookies: { sid: sessionId } })
+		);
+		expect(res.status).toBe(200);
+		const data = await res.json<LinkPage>();
+		expect(data.links).toHaveLength(2);
+		expect(data.nextCursor).not.toBeNull();
+	});
+
+	it("cursor fetches the next page without duplicates", async () => {
+		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
+
+		// Insert 4 links with distinct created_at values (newest last in loop)
+		for (let i = 0; i < 4; i++) {
+			await seedLink(env.hello_cf_spa_db, { userId, shortCode: `pag-dup-${i}` });
+			await new Promise(r => setTimeout(r, 5));
+		}
+
+		// Page 1: 2 links
+		const res1 = await call(
+			makeRequest(`${BASE}/api/links?limit=2`, "GET", { cookies: { sid: sessionId } })
+		);
+		const page1 = await res1.json<LinkPage>();
+		expect(page1.links).toHaveLength(2);
+		expect(page1.nextCursor).not.toBeNull();
+
+		// Page 2: remaining links using cursor
+		const res2 = await call(
+			makeRequest(`${BASE}/api/links?limit=2&cursor=${encodeURIComponent(page1.nextCursor!)}`, "GET", {
+				cookies: { sid: sessionId },
+			})
+		);
+		const page2 = await res2.json<LinkPage>();
+		expect(page2.links).toHaveLength(2);
+		expect(page2.nextCursor).toBeNull();
+
+		// No overlap between pages
+		const ids1 = new Set(page1.links.map(l => l.id));
+		for (const l of page2.links) {
+			expect(ids1.has(l.id)).toBe(false);
+		}
+
+		// Combined ordering: newest first across both pages
+		const allCodes = [...page1.links, ...page2.links].map(l => l.short_code);
+		expect(allCodes).toEqual(["pag-dup-3", "pag-dup-2", "pag-dup-1", "pag-dup-0"]);
+	});
+
+	it("cursor page returns nextCursor=null when it is the final page", async () => {
+		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
+
+		for (let i = 0; i < 3; i++) {
+			await seedLink(env.hello_cf_spa_db, { userId, shortCode: `pag-end-${i}` });
+			await new Promise(r => setTimeout(r, 5));
+		}
+
+		const res1 = await call(
+			makeRequest(`${BASE}/api/links?limit=2`, "GET", { cookies: { sid: sessionId } })
+		);
+		const page1 = await res1.json<LinkPage>();
+		expect(page1.nextCursor).not.toBeNull();
+
+		const res2 = await call(
+			makeRequest(`${BASE}/api/links?limit=2&cursor=${encodeURIComponent(page1.nextCursor!)}`, "GET", {
+				cookies: { sid: sessionId },
+			})
+		);
+		const page2 = await res2.json<LinkPage>();
+		expect(page2.links).toHaveLength(1);
+		expect(page2.nextCursor).toBeNull();
+	});
+
+	it("cursor isolates results to the authenticated user", async () => {
+		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
+		const other = await seedSession(env.hello_cf_spa_db, {
+			userId: "pag-other-user",
+			email: "pag-other@example.com",
+			googleSub: "pag-other-sub",
+		});
+
+		for (let i = 0; i < 3; i++) {
+			await seedLink(env.hello_cf_spa_db, { userId, shortCode: `pag-mine-${i}` });
+			await seedLink(env.hello_cf_spa_db, { userId: other.userId, shortCode: `pag-theirs-${i}` });
+			await new Promise(r => setTimeout(r, 5));
+		}
+
+		// Fetch all pages for the current user
+		let cursor: string | null = null;
+		const allLinks: { short_code: string }[] = [];
+		do {
+			const url = cursor
+				? `${BASE}/api/links?limit=2&cursor=${encodeURIComponent(cursor)}`
+				: `${BASE}/api/links?limit=2`;
+			const res = await call(makeRequest(url, "GET", { cookies: { sid: sessionId } }));
+			const page = await res.json<{ links: { short_code: string }[]; nextCursor: string | null }>();
+			allLinks.push(...page.links);
+			cursor = page.nextCursor;
+		} while (cursor);
+
+		// Only own links returned
+		expect(allLinks).toHaveLength(3);
+		for (const l of allLinks) {
+			expect(l.short_code.startsWith("pag-mine-")).toBe(true);
+		}
 	});
 });
 

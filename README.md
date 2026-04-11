@@ -1,4 +1,4 @@
-YAQQ is a lightweight, serverless link shortener built on Cloudflare Workers and D1, designed as a clean and secure foundation for a production-ready web application.
+aadd.li is a lightweight, serverless link shortener built on Cloudflare Workers and D1, designed as a clean and secure foundation for a production-ready web application.
 
 The project focuses on simplicity, robustness, and practical architecture rather than feature bloat. It provides a minimal browser-based interface combined with a hardened backend and a fully tested API.
 
