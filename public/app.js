@@ -1,5 +1,10 @@
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+function isPWA() {
+	return window.matchMedia('(display-mode: standalone)').matches
+		|| window.navigator.standalone === true;
+}
+
 function copyToClipboard(text, btn) {
 	navigator.clipboard.writeText(text).then(() => {
 		btn.textContent = "Kopiert!";
@@ -338,3 +343,64 @@ async function loadMe() {
 }
 
 loadMe();
+
+// ── Location link (PWA only) ──────────────────────────────────────────────────
+
+if (isPWA() && navigator.geolocation) {
+	document.getElementById("location-section-app").style.display = "block";
+}
+
+document.getElementById("location-btn-app").addEventListener("click", () => {
+	const btn = document.getElementById("location-btn-app");
+	btn.textContent = "Standort wird ermittelt…";
+	btn.disabled = true;
+
+	navigator.geolocation.getCurrentPosition(
+		async (pos) => {
+			const { latitude, longitude } = pos.coords;
+			const mapsUrl = `https://www.google.com/maps?q=${latitude},${longitude}`;
+			const now = new Date().toLocaleString("de-DE", {
+				day: "2-digit", month: "2-digit", year: "numeric",
+				hour: "2-digit", minute: "2-digit",
+			});
+			try {
+				const res = await fetch("/api/links", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						target_url: mapsUrl,
+						title: `Mein Standort – ${now}`,
+					}),
+				});
+				const data = await res.json();
+				if (!res.ok) throw new Error(data.error || "Fehler");
+				await loadLinks();
+			} catch (err) {
+				const statusEl = document.getElementById("links-status");
+				if (statusEl) {
+					statusEl.textContent = "Fehler: " + err.message;
+					statusEl.className = "error";
+				}
+			} finally {
+				btn.textContent = "Standort als Link speichern";
+				btn.disabled = false;
+			}
+		},
+		() => {
+			btn.textContent = "Standort als Link speichern";
+			btn.disabled = false;
+			const statusEl = document.getElementById("links-status");
+			if (statusEl) {
+				statusEl.textContent = "Standortzugriff verweigert.";
+				statusEl.className = "error";
+			}
+		},
+		{ enableHighAccuracy: true, timeout: 10000 }
+	);
+});
+
+// ── Service Worker registration ───────────────────────────────────────────────
+
+if ("serviceWorker" in navigator) {
+	navigator.serviceWorker.register("/sw.js");
+}

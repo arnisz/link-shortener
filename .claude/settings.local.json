@@ -1,7 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npm test:*)"
+      "Bash(npm test:*)",
+      "Bash(npx vitest:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(npm install:*)",
+      "Bash(mkdir -p \"/c/Users/arnol/source/repos/hello-cf-spa/scripts\")",
+      "Bash(mkdir -p \"/c/Users/arnol/source/repos/hello-cf-spa/public/icons\")"
     ]
   }
 }

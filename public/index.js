@@ -1,3 +1,8 @@
+function isPWA() {
+	return window.matchMedia('(display-mode: standalone)').matches
+		|| window.navigator.standalone === true;
+}
+
 // Auth check — redirect authenticated users straight to the app
 fetch("/api/me")
 	.then(r => r.json())
@@ -72,3 +77,49 @@ copyBtn.addEventListener("click", () => {
 		copyBtn.textContent = "Kopieren";
 	});
 });
+
+// ── Location short link (PWA only) ───────────────────────────────────────────
+
+if (isPWA() && navigator.geolocation) {
+	document.getElementById("location-section").style.display = "block";
+}
+
+document.getElementById("location-btn").addEventListener("click", () => {
+	const btn = document.getElementById("location-btn");
+	btn.textContent = "Standort wird ermittelt…";
+	btn.disabled = true;
+
+	navigator.geolocation.getCurrentPosition(
+		async (pos) => {
+			const { latitude, longitude } = pos.coords;
+			const mapsUrl = `https://www.google.com/maps?q=${latitude},${longitude}`;
+			try {
+				const res = await fetch("/api/links/anonymous", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ target_url: mapsUrl }),
+				});
+				const data = await res.json();
+				if (!res.ok) throw new Error(data.error || "Fehler");
+				showSuccess(data.short_url);
+			} catch (err) {
+				showError(err.message);
+			} finally {
+				btn.textContent = "Standort als Kurzlink teilen";
+				btn.disabled = false;
+			}
+		},
+		() => {
+			btn.textContent = "Standort als Kurzlink teilen";
+			btn.disabled = false;
+			showError("Standortzugriff verweigert. Bitte Berechtigung in den App-Einstellungen erteilen.");
+		},
+		{ enableHighAccuracy: true, timeout: 10000 }
+	);
+});
+
+// ── Service Worker registration ───────────────────────────────────────────────
+
+if ("serviceWorker" in navigator) {
+	navigator.serviceWorker.register("/sw.js");
+}

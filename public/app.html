@@ -5,6 +5,14 @@
 	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 	<title>aadd.li – Link-Kürzer</title>
 	<link rel="stylesheet" href="/style.css" />
+	<link rel="icon" href="/favicon.ico" sizes="any">
+	<link rel="icon" href="/icons/icon-192.png" type="image/png">
+	<link rel="manifest" href="/manifest.json">
+	<meta name="theme-color" content="#2563eb">
+	<meta name="mobile-web-app-capable" content="yes">
+	<meta name="apple-mobile-web-app-capable" content="yes">
+	<meta name="apple-mobile-web-app-status-bar-style" content="default">
+	<meta name="apple-mobile-web-app-title" content="aadd.li">
 	<style>
 		/* ── Page shell ── */
 		body {
@@ -367,6 +375,13 @@
 		</header>
 
 		<section id="link-section" hidden>
+			<!-- Location shortlink (PWA only) -->
+			<div id="location-section-app" style="display:none; padding: 1.5rem 1.5rem 0;">
+				<button type="button" id="location-btn-app" class="btn-primary">
+					Standort als Link speichern
+				</button>
+			</div>
+
 			<!-- Create form -->
 			<div class="section-create">
 				<h2 class="section-heading">Neuen Link kürzen</h2>

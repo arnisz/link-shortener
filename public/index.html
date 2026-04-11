@@ -9,6 +9,32 @@
 	<meta name="description" content="Kürze lange URLs in Sekunden – kostenlos, ohne Anmeldung.">
 	<meta name="robots" content="index, follow">
 	<link rel="canonical" href="https://aadd.li">
+	<link rel="icon" href="/favicon.ico" sizes="any">
+	<link rel="icon" href="/icons/icon-192.png" type="image/png">
+	<link rel="manifest" href="/manifest.json">
+	<meta name="theme-color" content="#2563eb">
+	<meta name="mobile-web-app-capable" content="yes">
+	<meta name="apple-mobile-web-app-capable" content="yes">
+	<meta name="apple-mobile-web-app-status-bar-style" content="default">
+	<meta name="apple-mobile-web-app-title" content="aadd.li">
+	<style>
+		#location-section { text-align: center; margin: 1.5rem 0 0; }
+		#location-btn {
+			padding: 0.85rem 1.5rem;
+			font-size: 1rem;
+			font-weight: 600;
+			background: #2563eb;
+			color: #fff;
+			border: none;
+			border-radius: 999px;
+			cursor: pointer;
+			white-space: nowrap;
+			transition: background 0.15s;
+			font-family: inherit;
+		}
+		#location-btn:hover { background: #1d4ed8; }
+		#location-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+	</style>
 </head>
 <body>
 <main class="hero">
@@ -39,6 +65,13 @@
 	<p class="example">
 		Beispiel: example.com/very/long/link → aadd.li/r/abc12
 	</p>
+
+	<div id="location-section" style="display:none;">
+		<button type="button" id="location-btn">
+			Standort als Kurzlink teilen
+		</button>
+		<p class="hint">Erstellt einen Kurzlink zu deinem aktuellen GPS-Standort.</p>
+	</div>
 
 	<div class="secondary-actions">
 		<a href="/login">
