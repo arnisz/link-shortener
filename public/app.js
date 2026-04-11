@@ -1,5 +1,18 @@
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+function copyToClipboard(text, btn) {
+	navigator.clipboard.writeText(text).then(() => {
+		btn.textContent = "Kopiert!";
+		btn.style.borderColor = "#86efac";
+		btn.style.color = "#166534";
+		setTimeout(() => {
+			btn.textContent = "Kopieren";
+			btn.style.borderColor = "";
+			btn.style.color = "";
+		}, 2000);
+	}).catch(() => {});
+}
+
 function fmtDate(iso) {
 	if (!iso) return "";
 	return new Date(iso).toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" });
@@ -37,6 +50,17 @@ function renderLinkCard(l) {
 	head.appendChild(title);
 
 	head.appendChild(makeBadge(l));
+
+	const copyBtn = document.createElement("button");
+	copyBtn.className = "btn-sm";
+	copyBtn.textContent = "Kopieren";
+	copyBtn.style.minWidth = "5.5rem";
+	if (!navigator.clipboard) {
+		copyBtn.style.display = "none";
+	} else {
+		copyBtn.addEventListener("click", () => copyToClipboard(l.short_url, copyBtn));
+	}
+	head.appendChild(copyBtn);
 
 	const toggleBtn = document.createElement("button");
 	toggleBtn.className = "btn-sm";
