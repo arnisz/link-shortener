@@ -100,11 +100,9 @@ async function exchangeCodeForToken(
 	});
 
 	if (!tokenResp.ok) {
-		log("TOKEN", `Exchange failed: status ${tokenResp.status}`);
-		return {
-			success: false,
-			response: new Response(`Google token exchange failed: ${await tokenResp.text()}`, { status: 502 })
-		};
+		const tokenError = await tokenResp.text();
+		log("TOKEN", `Exchange failed: ${tokenError}`);
+		return { success: false, response: new Response("Authentication failed", { status: 502 }) };
 	}
 
 	const tokenJson = await tokenResp.json<GoogleTokenResponse>();
@@ -127,12 +125,9 @@ async function processGoogleCallback(
 	let payload;
 	try {
 		payload = await parseGoogleIdToken(idToken);
-	} catch (e: any) {
-		log("TOKEN", `JWT verification failed: ${e.message}`);
-		return {
-			success: false,
-			response: new Response(`ID token verification failed: ${e.message}`, { status: 400 })
-		};
+	} catch (e) {
+		log("JWT", `Verification failed: ${e instanceof Error ? e.message : String(e)}`);
+		return { success: false, response: new Response("Authentication failed", { status: 400 }) };
 	}
 
 	if (payload.nonce !== cookieNonce) {

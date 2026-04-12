@@ -60,5 +60,5 @@ export async function checkSpamFilter(url: string, db: D1Database): Promise<bool
 			.all<{ keyword: string }>();
 		spamKeywordCache = results.map(r => r.keyword);
 	}
-	return spamKeywordCache.some(kw => new RegExp(kw, "i").test(url));
+	return spamKeywordCache.some(kw => url.toLowerCase().includes(kw.toLowerCase()));
 }
