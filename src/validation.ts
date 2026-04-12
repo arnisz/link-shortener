@@ -1,4 +1,5 @@
 import { SHORT_CODE_LENGTH, SHORT_CODE_CHARS } from "./config";
+import { log } from "./utils";
 
 export const ALIAS_REGEX = /^[a-z0-9_-]{3,50}$/;
 export const ALIAS_RESERVED = new Set(["api", "login", "logout", "app", "r"]);
@@ -45,8 +46,9 @@ export function requireJson(request: Request): boolean {
 	return ct.includes("application/json");
 }
 
-// Module-level keyword cache: populated on first call, lives for the Worker lifetime.
+// Module-level keyword cache: populated on first call, refreshed every 5 minutes.
 let spamKeywordCache: string[] | null = null;
+let spamKeywordCacheExpiry = 0;
 
 /**
  * Returns true if the URL matches any spam keyword from the spam_keywords table.
@@ -54,11 +56,19 @@ let spamKeywordCache: string[] | null = null;
  * The keyword list is cached in module scope (refreshed on cold start only).
  */
 export async function checkSpamFilter(url: string, db: D1Database): Promise<boolean> {
-	if (!spamKeywordCache) {
-		const { results } = await db
-			.prepare("SELECT keyword FROM spam_keywords")
-			.all<{ keyword: string }>();
-		spamKeywordCache = results.map(r => r.keyword);
+	if (!spamKeywordCache || Date.now() > spamKeywordCacheExpiry) {
+		try {
+			const { results } = await db.prepare("SELECT keyword FROM spam_keywords")
+				.all<{ keyword: string }>();
+			if (results.length > 0) {
+				spamKeywordCache = results.map(r => r.keyword);
+				spamKeywordCacheExpiry = Date.now() + 5 * 60 * 1000;
+			}
+			// if results.length === 0: leave cache as-is, retry next request
+		} catch (e) {
+			log("SPAM", `Cache load failed: ${e instanceof Error ? e.message : String(e)}`);
+			// on DB error: do not update cache, retry on next request
+		}
 	}
-	return spamKeywordCache.some(kw => url.toLowerCase().includes(kw.toLowerCase()));
+	return spamKeywordCache?.some(kw => url.toLowerCase().includes(kw.toLowerCase())) ?? false;
 }
