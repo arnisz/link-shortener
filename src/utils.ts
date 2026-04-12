@@ -64,3 +64,43 @@ export function errResponse(message: string, status: number): Response {
 export function log(category: string, message: string): void {
 	console.log(`[${category}] ${message}`);
 }
+
+export function applySecurityHeaders(response: Response): Response {
+	const headers = new Headers(response.headers);
+
+	// Prevent clickjacking — no framing allowed from other origins
+	headers.set('Content-Security-Policy',
+		"default-src 'self'; " +
+		"script-src 'self'; " +
+		"style-src 'self' 'unsafe-inline'; " +
+		"img-src 'self' data: https://lh3.googleusercontent.com; " +
+		"connect-src 'self' https://accounts.google.com; " +
+		"frame-ancestors 'none';"
+	);
+
+	// Belt-and-suspenders clickjacking protection (older browsers)
+	headers.set('X-Frame-Options', 'DENY');
+
+	// Prevent MIME type sniffing
+	headers.set('X-Content-Type-Options', 'nosniff');
+
+	// Control referrer on redirects — critical for /r/:code redirects
+	// Only send origin, never the full path (hides short code from target server)
+	headers.set('Referrer-Policy', 'strict-origin');
+
+	// Restrict browser features — geolocation only allowed from self (PWA use)
+	headers.set('Permissions-Policy',
+		'geolocation=(self), camera=(), microphone=(), payment=()'
+	);
+
+	// HSTS — force HTTPS (Cloudflare handles this but belt-and-suspenders)
+	headers.set('Strict-Transport-Security',
+		'max-age=31536000; includeSubDomains; preload'
+	);
+
+	return new Response(response.body, {
+		status: response.status,
+		statusText: response.statusText,
+		headers
+	});
+}

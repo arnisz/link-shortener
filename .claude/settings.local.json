@@ -13,7 +13,8 @@
       "Bash(node -e \"const m=require\\('./node_modules/@cloudflare/vitest-pool-workers'\\); console.log\\(Object.keys\\(m\\)\\)\")",
       "Bash(node --input-type=module -e \"import m from './node_modules/@cloudflare/vitest-pool-workers/dist/pool/index.mjs'; console.log\\(Object.keys\\(m\\)\\)\")",
       "Bash(node --input-type=module -e \"import * as m from './node_modules/@cloudflare/vitest-pool-workers/dist/pool/index.mjs'; console.log\\(Object.keys\\(m\\)\\)\")",
-      "Bash(node --input-type=module -e \"import * as m from './node_modules/@cloudflare/vitest-pool-workers/dist/codemods/vitest-v3-to-v4.mjs'; console.log\\(Object.keys\\(m\\)\\)\")"
+      "Bash(node --input-type=module -e \"import * as m from './node_modules/@cloudflare/vitest-pool-workers/dist/codemods/vitest-v3-to-v4.mjs'; console.log\\(Object.keys\\(m\\)\\)\")",
+      "Bash(npx tsc:*)"
     ]
   }
 }
