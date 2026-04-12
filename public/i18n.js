@@ -2,9 +2,10 @@ const TRANSLATIONS = {
   en: {
     // ── Landing page ────────────────────────────────────────────────────────────
     'page.title':          'aadd.li – Link Shortener',
+    'page.description':    'Free URL shortener with expiring links. No sign-up required. Shorten links instantly for privacy and ease of use.',
     'brand':               'aadd.li',
-    'hero.title':          'Shorten links – no fuss',
-    'hero.subline':        'Shorten long URLs in seconds, share instantly.',
+    'hero.title':          'Free URL Shortener with Expiring Links',
+    'hero.subline':        'Shorten long URLs instantly. No registration required. Links expire automatically after 48h.',
     'form.placeholder':    'https://example.com/long-link',
     'form.arialabel':      'Enter long URL',
     'form.submit':         'Shorten link',
@@ -25,6 +26,16 @@ const TRANSLATIONS = {
     'error.generic':       'An error occurred. Please try again.',
     'error.network':       'Network error. Please try again.',
     'footer.impressum':    'Imprint',
+
+    // ── SEO Content ─────────────────────────────────────────────────────────────
+    'seo.title':          'Free URL Shortener with Expiring Links',
+    'seo.p1':             'aadd.li is a fast and simple URL shortener designed for privacy and ease of use. Create short links instantly without the need for an account.',
+    'seo.p2':             'Unlike other services, our anonymous links expire automatically after 48 hours, keeping the web clean. For permanent links and custom aliases, you can optionally sign in with your Google account.',
+    'seo.features.title': 'Why use aadd.li?',
+    'seo.features.1':     'Create short links instantly',
+    'seo.features.2':     'Links expire automatically (48h default)',
+    'seo.features.3':     'Optional login for custom aliases and management',
+    'seo.features.4':     'No unnecessary overhead or tracking',
 
     // ── App page ─────────────────────────────────────────────────────────────────
     'app.page.title':                  'aadd.li – App',
@@ -76,9 +87,10 @@ const TRANSLATIONS = {
   de: {
     // ── Landing page ────────────────────────────────────────────────────────────
     'page.title':          'aadd.li – dein Link-Kürzer',
+    'page.description':    'Kostenloser Link-Kürzer mit ablaufenden Links. Ohne Anmeldung. URLs sofort und datenschutzfreundlich kürzen.',
     'brand':               'aadd.li',
-    'hero.title':          'Einfach Links kürzen – ohne Schnickschnack',
-    'hero.subline':        'Kürze lange URLs in Sekunden, teile sie sofort und verwalte sie bei Bedarf mit Login.',
+    'hero.title':          'Link-Kürzer mit ablaufenden Links',
+    'hero.subline':        'Kürze lange URLs sofort. Ohne Anmeldung. Anonyme Links laufen automatisch nach 48h ab.',
     'form.placeholder':    'https://example.com/langer-link',
     'form.arialabel':      'Lange URL eingeben',
     'form.submit':         'Link kürzen',
@@ -99,6 +111,16 @@ const TRANSLATIONS = {
     'error.generic':       'Ein Fehler ist aufgetreten. Bitte versuche es erneut.',
     'error.network':       'Netzwerkfehler. Bitte versuche es erneut.',
     'footer.impressum':    'Impressum',
+
+    // ── SEO Content ─────────────────────────────────────────────────────────────
+    'seo.title':          'Kostenloser Link-Kürzer mit ablaufenden Links',
+    'seo.p1':             'aadd.li ist ein schneller und einfacher URL-Shortener, der auf Datenschutz und Benutzerfreundlichkeit ausgelegt ist. Erstellen Sie sofort Kurzlinks, ohne ein Konto erstellen zu müssen.',
+    'seo.p2':             'Im Gegensatz zu anderen Diensten laufen unsere anonymen Links automatisch nach 48 Stunden ab. Für dauerhafte Links und eigene Aliase können Sie sich optional mit Ihrem Google-Konto anmelden.',
+    'seo.features.title': 'Warum aadd.li nutzen?',
+    'seo.features.1':     'Links sofort erstellen',
+    'seo.features.2':     'Links laufen automatisch ab (Standard 48h)',
+    'seo.features.3':     'Optionaler Login für eigene Aliase und Verwaltung',
+    'seo.features.4':     'Kein unnötiger Ballast oder Tracking',
 
     // ── App page ─────────────────────────────────────────────────────────────────
     'app.page.title':                  'aadd.li – Link-Kürzer',
@@ -150,9 +172,10 @@ const TRANSLATIONS = {
   es: {
     // ── Landing page ────────────────────────────────────────────────────────────
     'page.title':          'aadd.li – Acortador de enlaces',
+    'page.description':    'Acortador de URLs gratuito con caducidad. Sin registro. Acorta enlaces al instante para mayor privacidad.',
     'brand':               'aadd.li',
-    'hero.title':          'Acorta enlaces – sin complicaciones',
-    'hero.subline':        'Acorta URLs largas en segundos y compártelas al instante.',
+    'hero.title':          'Acortador de enlaces con caducidad',
+    'hero.subline':        'Acorta URLs largas al instante. Sin registro. Los enlaces anónimos caducan automáticamente en 48h.',
     'form.placeholder':    'https://ejemplo.com/enlace-largo',
     'form.arialabel':      'Introduce la URL larga',
     'form.submit':         'Acortar enlace',
@@ -173,6 +196,16 @@ const TRANSLATIONS = {
     'error.generic':       'Ocurrió un error. Por favor, inténtalo de nuevo.',
     'error.network':       'Error de red. Por favor, inténtalo de nuevo.',
     'footer.impressum':    'Aviso legal',
+
+    // ── SEO Content ─────────────────────────────────────────────────────────────
+    'seo.title':          'Acortador de URLs gratuito con enlaces que caducan',
+    'seo.p1':             'aadd.li es un acortador de URLs rápido y sencillo diseñado para la privacidad y la facilidad de uso. Crea enlaces cortos al instante sin necesidad de una cuenta.',
+    'seo.p2':             'A diferencia de otros servicios, nuestros enlaces anónimos caducan automáticamente después de 48 horas. Para enlaces permanentes y alias personalizados, puedes iniciar sesión opcionalmente con tu cuenta de Google.',
+    'seo.features.title': '¿Por qué usar aadd.li?',
+    'seo.features.1':     'Crea enlaces cortos al instante',
+    'seo.features.2':     'Los enlaces caducan automáticamente (48h por defecto)',
+    'seo.features.3':     'Inicio de sesión opcional para alias personalizados y gestión',
+    'seo.features.4':     'Sin sobrecarga innecesaria ni rastreo',
 
     // ── App page ─────────────────────────────────────────────────────────────────
     'app.page.title':                  'aadd.li – App',
@@ -224,9 +257,10 @@ const TRANSLATIONS = {
   fr: {
     // ── Landing page ────────────────────────────────────────────────────────────
     'page.title':          'aadd.li – Raccourcisseur de liens',
+    'page.description':    'Raccourcisseur d\'URL gratuit avec expiration. Sans inscription. Raccourcissez vos liens instantanément pour plus de confidentialité.',
     'brand':               'aadd.li',
-    'hero.title':          'Raccourcissez vos liens – sans chichis',
-    'hero.subline':        'Raccourcissez de longues URLs en quelques secondes et partagez-les instantanément.',
+    'hero.title':          'Raccourcisseur d\'URL gratuit avec expiration',
+    'hero.subline':        'Raccourcissez vos URLs instantanément. Sans inscription. Liens anonymes expirent après 48h.',
     'form.placeholder':    'https://exemple.com/lien-long',
     'form.arialabel':      "Entrez l'URL longue",
     'form.submit':         'Raccourcir le lien',
@@ -247,6 +281,16 @@ const TRANSLATIONS = {
     'error.generic':       "Une erreur s'est produite. Veuillez réessayer.",
     'error.network':       'Erreur réseau. Veuillez réessayer.',
     'footer.impressum':    'Mentions légales',
+
+    // ── SEO Content ─────────────────────────────────────────────────────────────
+    'seo.title':          'Raccourcisseur d\'URL gratuit avec liens expirables',
+    'seo.p1':             'aadd.li est un raccourcisseur d\'URL rapide et simple conçu pour la confidentialité et la facilité d\'utilisation. Créez des liens courts instantanément sans avoir besoin de compte.',
+    'seo.p2':             'Contrairement à d\'autres services, nos liens anonymes expirent automatiquement après 48 heures. Pour des liens permanents et des alias personnalisés, vous pouvez facultativement vous connecter avec votre compte Google.',
+    'seo.features.title': 'Pourquoi utiliser aadd.li ?',
+    'seo.features.1':     'Créez des liens courts instantanément',
+    'seo.features.2':     'Les liens expirent automatiquement (48h par défaut)',
+    'seo.features.3':     'Connexion facultative pour les alias personnalisés et la gestion',
+    'seo.features.4':     'Pas de surcharge inutile ni de suivi',
 
     // ── App page ─────────────────────────────────────────────────────────────────
     'app.page.title':                  'aadd.li – Application',

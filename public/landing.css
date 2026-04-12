@@ -218,6 +218,48 @@ body {
 	margin: 0;
 }
 
+/* ── SEO Content ── */
+.seo-content {
+	margin-top: 2rem;
+	text-align: left;
+	max-width: 480px;
+	border-top: 1px solid #f3f4f6;
+	padding-top: 2rem;
+}
+
+.seo-content h2 {
+	font-size: 1.25rem;
+	font-weight: 600;
+	color: #111827;
+	margin-bottom: 0.75rem;
+}
+
+.seo-content h3 {
+	font-size: 1.1rem;
+	font-weight: 600;
+	color: #111827;
+	margin: 1.5rem 0 0.5rem;
+}
+
+.seo-content p {
+	font-size: 0.95rem;
+	color: #4b5563;
+	line-height: 1.6;
+	margin-bottom: 1rem;
+}
+
+.seo-content ul {
+	padding-left: 1.25rem;
+	margin: 0;
+}
+
+.seo-content li {
+	font-size: 0.95rem;
+	color: #4b5563;
+	line-height: 1.6;
+	margin-bottom: 0.35rem;
+}
+
 /* ── Footer ── */
 .footer-links {
 	margin-top: 0.5rem;
