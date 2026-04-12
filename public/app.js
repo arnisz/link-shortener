@@ -5,13 +5,30 @@ function isPWA() {
 		|| window.navigator.standalone === true;
 }
 
+function translate(key, params) {
+	return typeof window.t === "function" ? window.t(key, params) : key;
+}
+
+function getActiveLocale() {
+	return window.getLocale();
+}
+
+const authState = {
+	mode: "loading",
+	email: "",
+	errorMessage: "",
+};
+
+let createStatusState = { type: "idle", message: "" };
+let isLocationBusy = false;
+
 function copyToClipboard(text, btn) {
 	navigator.clipboard.writeText(text).then(() => {
-		btn.textContent = "Kopiert!";
+		btn.textContent = translate("app.link.btn.copied");
 		btn.style.borderColor = "#86efac";
 		btn.style.color = "#166534";
 		setTimeout(() => {
-			btn.textContent = "Kopieren";
+			btn.textContent = translate("app.link.btn.copy");
 			btn.style.borderColor = "";
 			btn.style.color = "";
 		}, 2000);
@@ -20,7 +37,83 @@ function copyToClipboard(text, btn) {
 
 function fmtDate(iso) {
 	if (!iso) return "";
-	return new Date(iso).toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" });
+	return new Date(iso).toLocaleString(getActiveLocale(), { dateStyle: "short", timeStyle: "short" });
+}
+
+function setCreateStatus(type, message = "") {
+	createStatusState = { type, message };
+	renderCreateStatus();
+}
+
+function renderCreateStatus() {
+	const statusEl = document.getElementById("create-status");
+	if (!statusEl) return;
+
+	statusEl.className = createStatusState.type === "error" ? "error" : "";
+
+	switch (createStatusState.type) {
+		case "submitting":
+			statusEl.textContent = translate("app.create.submitting");
+			break;
+		case "success":
+			statusEl.textContent = translate("app.create.success_prefix", { url: createStatusState.message });
+			break;
+		case "error":
+			statusEl.textContent = createStatusState.message || translate("error.app.create");
+			break;
+		default:
+			statusEl.textContent = "";
+	}
+}
+
+function renderAuthStatus() {
+	const statusEl = document.getElementById("status");
+	const logoutForm = document.getElementById("logout-form");
+	const linkSection = document.getElementById("link-section");
+	if (!statusEl || !logoutForm || !linkSection) return;
+
+	statusEl.textContent = "";
+
+	if (authState.mode === "anonymous") {
+		statusEl.textContent = `${translate("app.notloggedin")} `;
+		const a = document.createElement("a");
+		a.href = "/login";
+		const btn = document.createElement("button");
+		btn.type = "button";
+		btn.textContent = translate("login.button");
+		a.appendChild(btn);
+		statusEl.appendChild(a);
+		logoutForm.hidden = true;
+		linkSection.hidden = true;
+		return;
+	}
+
+	if (authState.mode === "authenticated") {
+		statusEl.textContent = `${translate("app.loggedin")} ${authState.email}`;
+		logoutForm.hidden = false;
+		linkSection.hidden = false;
+		return;
+	}
+
+	if (authState.mode === "error") {
+		statusEl.textContent = `${translate("app.load.error")} ${authState.errorMessage}`;
+		logoutForm.hidden = true;
+		linkSection.hidden = true;
+		return;
+	}
+
+	statusEl.textContent = translate("app.links.loading");
+	logoutForm.hidden = true;
+	linkSection.hidden = true;
+}
+
+function setLocationButtonState(busy) {
+	isLocationBusy = busy;
+	const btn = document.getElementById("location-btn-app");
+	if (!btn) return;
+
+	btn.textContent = translate(busy ? "app.location.detecting" : "app.location.button");
+	btn.disabled = busy;
 }
 
 // ── DOM rendering ─────────────────────────────────────────────────────────────
@@ -31,13 +124,13 @@ function makeBadge(link) {
 	const now = Date.now();
 	if (!link.is_active) {
 		span.classList.add("badge-inactive");
-		span.textContent = "Inaktiv";
+		span.textContent = translate("app.link.badge.inactive");
 	} else if (link.expires_at && new Date(link.expires_at).getTime() < now) {
 		span.classList.add("badge-expired");
-		span.textContent = "Abgelaufen";
+		span.textContent = translate("app.link.badge.expired");
 	} else {
 		span.classList.add("badge-active");
-		span.textContent = "Aktiv";
+		span.textContent = translate("app.link.badge.active");
 	}
 	return span;
 }
@@ -58,7 +151,7 @@ function renderLinkCard(l) {
 
 	const copyBtn = document.createElement("button");
 	copyBtn.className = "btn-sm";
-	copyBtn.textContent = "Kopieren";
+	copyBtn.textContent = translate("app.link.btn.copy");
 	copyBtn.style.minWidth = "5.5rem";
 	if (!navigator.clipboard) {
 		copyBtn.style.display = "none";
@@ -69,13 +162,13 @@ function renderLinkCard(l) {
 
 	const toggleBtn = document.createElement("button");
 	toggleBtn.className = "btn-sm";
-	toggleBtn.textContent = l.is_active ? "Deaktivieren" : "Aktivieren";
+	toggleBtn.textContent = l.is_active ? translate("app.link.btn.deactivate") : translate("app.link.btn.activate");
 	toggleBtn.addEventListener("click", () => toggleLink(l.id, !!l.is_active));
 	head.appendChild(toggleBtn);
 
 	const deleteBtn = document.createElement("button");
 	deleteBtn.className = "btn-sm";
-	deleteBtn.textContent = "Löschen";
+	deleteBtn.textContent = translate("app.link.btn.delete");
 	deleteBtn.addEventListener("click", () => deleteLink(l.id));
 	head.appendChild(deleteBtn);
 
@@ -101,8 +194,9 @@ function renderLinkCard(l) {
 	// ── Stats: clicks + created + expiry ──
 	const metaStats = document.createElement("div");
 	metaStats.className = "link-meta";
-	let stats = `${l.click_count} Klick${l.click_count !== 1 ? "s" : ""} · Erstellt: ${fmtDate(l.created_at)}`;
-	if (l.expires_at) stats += " · Läuft ab: " + fmtDate(l.expires_at);
+	const clickLabel = l.click_count === 1 ? translate("app.link.click") : translate("app.link.clicks");
+	let stats = `${l.click_count} ${clickLabel} · ${translate("app.link.created")} ${fmtDate(l.created_at)}`;
+	if (l.expires_at) stats += ` · ${translate("app.link.expires")} ${fmtDate(l.expires_at)}`;
 	metaStats.textContent = stats;
 	row.appendChild(metaStats);
 
@@ -122,7 +216,7 @@ async function fetchLinks(cursor, limit) {
 	if (cursor) params.set("cursor", cursor);
 	const resp = await fetch(`/api/links?${params}`);
 	if (resp.status === 401) throw Object.assign(new Error("Unauthorized"), { status: 401 });
-	if (!resp.ok) throw new Error("Fehler beim Laden der Links.");
+	if (!resp.ok) throw Object.assign(new Error(resp.statusText || "Request failed"), { status: resp.status });
 	return resp.json();
 }
 
@@ -157,8 +251,8 @@ function setupSentinel(list) {
 			const statusEl = document.getElementById("links-status");
 			if (statusEl) {
 				statusEl.textContent = err.status === 401
-					? "Sitzung abgelaufen. Bitte neu anmelden."
-					: (err.message || "Fehler beim Laden weiterer Links.");
+					? `${translate("app.session.expired")} ${translate("app.session.relogin")}`
+					: (err.message && err.message !== "Request failed" ? err.message : translate("app.links.load.more.error"));
 				statusEl.className = "error";
 			}
 			if (err.status === 401) window.location.href = "/login";
@@ -176,7 +270,7 @@ function appendEndMessage(list) {
 	if (document.getElementById("links-end")) return;
 	const el = document.createElement("p");
 	el.id = "links-end";
-	el.textContent = "Alle Links geladen";
+	el.textContent = translate("app.links.all_loaded");
 	list.appendChild(el);
 }
 
@@ -196,7 +290,7 @@ async function toggleLink(id, currentIsActive) {
 		const data = await resp.json().catch(() => ({}));
 		const statusEl = document.getElementById("links-status");
 		if (statusEl) {
-			statusEl.textContent = "Fehler: " + (data.error ?? resp.statusText);
+			statusEl.textContent = data.error ?? translate("error.app.toggle");
 			statusEl.className = "error";
 		}
 	}
@@ -212,7 +306,7 @@ async function deleteLink(id) {
 		const data = await resp.json().catch(() => ({}));
 		const statusEl = document.getElementById("links-status");
 		if (statusEl) {
-			statusEl.textContent = "Fehler: " + (data.error ?? resp.statusText);
+			statusEl.textContent = data.error ?? translate("error.app.delete");
 			statusEl.className = "error";
 		}
 	}
@@ -230,7 +324,7 @@ async function loadLinks() {
 
 	list.innerHTML = "";
 	const loading = document.createElement("em");
-	loading.textContent = "Lade…";
+	loading.textContent = translate("app.links.loading");
 	list.appendChild(loading);
 
 	try {
@@ -242,7 +336,7 @@ async function loadLinks() {
 
 		if (!data.links.length) {
 			const empty = document.createElement("em");
-			empty.textContent = "Noch keine Links – erstelle deinen ersten!";
+			empty.textContent = translate("app.links.empty");
 			list.appendChild(empty);
 			return;
 		}
@@ -258,14 +352,16 @@ async function loadLinks() {
 		_isFetching = false;
 		list.innerHTML = "";
 		if (err.status === 401) {
-			const msg = document.createTextNode("Sitzung abgelaufen. ");
+			const msg = document.createTextNode(`${translate("app.session.expired")} `);
 			const a   = document.createElement("a");
 			a.href = "/login";
-			a.textContent = "Bitte neu anmelden.";
+			a.textContent = translate("app.session.relogin");
 			list.appendChild(msg);
 			list.appendChild(a);
 		} else {
-			list.textContent = err.message || "Fehler beim Laden der Links.";
+			list.textContent = err.message && err.message !== "Request failed"
+				? err.message
+				: translate("app.links.load.error");
 		}
 	}
 }
@@ -274,9 +370,7 @@ async function loadLinks() {
 
 document.getElementById("create-form").addEventListener("submit", async (e) => {
 	e.preventDefault();
-	const statusEl = document.getElementById("create-status");
-	statusEl.className = "";
-	statusEl.textContent = "Erstelle…";
+	setCreateStatus("submitting");
 	const form = e.currentTarget;
 
 	const expiresRaw = form.elements["expires_at"].value;
@@ -296,49 +390,40 @@ document.getElementById("create-form").addEventListener("submit", async (e) => {
 		});
 		const data = await resp.json();
 		if (!resp.ok) {
-			statusEl.className = "error";
-			statusEl.textContent = "Fehler: " + (data.error ?? resp.statusText);
+			setCreateStatus("error", data.error ?? translate("error.app.create"));
 			return;
 		}
-		statusEl.textContent = "✓ Erstellt: " + data.short_url;
+		setCreateStatus("success", data.short_url);
 		form.reset();
 		await loadLinks();
 	} catch (err) {
-		statusEl.className = "error";
-		statusEl.textContent = "Fehler: " + String(err);
+		setCreateStatus("error", err.message || String(err) || translate("error.app.create"));
 	}
 });
 
 // ── Auth / session check ──────────────────────────────────────────────────────
 
 async function loadMe() {
-	const statusEl   = document.getElementById("status");
-	const logoutForm  = document.getElementById("logout-form");
-	const linkSection = document.getElementById("link-section");
+	authState.mode = "loading";
+	authState.email = "";
+	authState.errorMessage = "";
+	renderAuthStatus();
 	try {
 		const resp = await fetch("/api/me");
 		const data = await resp.json();
 		if (!data.authenticated) {
-			statusEl.textContent = "Nicht eingeloggt. ";
-			const a   = document.createElement("a");
-			a.href = "/login";
-			const btn = document.createElement("button");
-			btn.type = "button";
-			btn.textContent = "Mit Google anmelden";
-			a.appendChild(btn);
-			statusEl.appendChild(a);
-			logoutForm.hidden  = true;
-			linkSection.hidden = true;
+			authState.mode = "anonymous";
+			renderAuthStatus();
 			return;
 		}
-		statusEl.textContent = "Eingeloggt als " + data.user.email;
-		logoutForm.hidden  = false;
-		linkSection.hidden = false;
+		authState.mode = "authenticated";
+		authState.email = data.user.email;
+		renderAuthStatus();
 		await loadLinks();
 	} catch (err) {
-		statusEl.textContent = "Fehler beim Laden: " + String(err);
-		logoutForm.hidden  = true;
-		linkSection.hidden = true;
+		authState.mode = "error";
+		authState.errorMessage = err.message || String(err);
+		renderAuthStatus();
 	}
 }
 
@@ -351,15 +436,13 @@ if (isPWA() && navigator.geolocation) {
 }
 
 document.getElementById("location-btn-app").addEventListener("click", () => {
-	const btn = document.getElementById("location-btn-app");
-	btn.textContent = "Standort wird ermittelt…";
-	btn.disabled = true;
+	setLocationButtonState(true);
 
 	navigator.geolocation.getCurrentPosition(
 		async (pos) => {
 			const { latitude, longitude } = pos.coords;
 			const mapsUrl = `https://www.google.com/maps?q=${latitude},${longitude}`;
-			const now = new Date().toLocaleString("de-DE", {
+			const now = new Date().toLocaleString(getActiveLocale(), {
 				day: "2-digit", month: "2-digit", year: "numeric",
 				hour: "2-digit", minute: "2-digit",
 			});
@@ -369,35 +452,52 @@ document.getElementById("location-btn-app").addEventListener("click", () => {
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify({
 						target_url: mapsUrl,
-						title: `Mein Standort – ${now}`,
+						title: `${translate("app.location.title_prefix")} ${now}`,
 					}),
 				});
 				const data = await res.json();
-				if (!res.ok) throw new Error(data.error || "Fehler");
+				if (!res.ok) {
+					const statusEl = document.getElementById("links-status");
+					if (statusEl) {
+						statusEl.textContent = data.error || translate("error.app.create");
+						statusEl.className = "error";
+					}
+					return;
+				}
 				await loadLinks();
 			} catch (err) {
 				const statusEl = document.getElementById("links-status");
 				if (statusEl) {
-					statusEl.textContent = "Fehler: " + err.message;
+					statusEl.textContent = err.message || translate("error.app.create");
 					statusEl.className = "error";
 				}
 			} finally {
-				btn.textContent = "Standort als Link speichern";
-				btn.disabled = false;
+				setLocationButtonState(false);
 			}
 		},
 		() => {
-			btn.textContent = "Standort als Link speichern";
-			btn.disabled = false;
+			setLocationButtonState(false);
 			const statusEl = document.getElementById("links-status");
 			if (statusEl) {
-				statusEl.textContent = "Standortzugriff verweigert.";
+				statusEl.textContent = translate("app.location.denied");
 				statusEl.className = "error";
 			}
 		},
 		{ enableHighAccuracy: true, timeout: 10000 }
 	);
 });
+
+document.addEventListener("i18n:change", () => {
+	renderAuthStatus();
+	renderCreateStatus();
+	setLocationButtonState(isLocationBusy);
+	if (authState.mode === "authenticated") {
+		loadLinks();
+	}
+});
+
+renderCreateStatus();
+setLocationButtonState(false);
 
 // ── Service Worker registration ───────────────────────────────────────────────
 

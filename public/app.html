@@ -3,7 +3,7 @@
 <head>
 	<meta charset="UTF-8" />
 	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-	<title>aadd.li – Link-Kürzer</title>
+	<title data-i18n="app.page.title">aadd.li – Link-Kürzer</title>
 	<link rel="stylesheet" href="/style.css" />
 	<link rel="icon" href="/favicon.ico" sizes="any">
 	<link rel="icon" href="/icons/icon-192.png" type="image/png">
@@ -365,63 +365,64 @@
 		<!-- Header: brand + user email + logout -->
 		<header class="app-header">
 			<div class="app-brand-row">
-				<div class="brand">aadd.li</div>
+				<div class="brand" data-i18n="brand">aadd.li</div>
 				<form id="logout-form" method="post" action="/logout" hidden>
-					<button type="submit" class="btn-ghost">Abmelden</button>
+					<button type="submit" class="btn-ghost" data-i18n="app.logout">Abmelden</button>
 				</form>
 			</div>
-			<p id="status">Lade…</p>
+			<p id="status" data-i18n="app.links.loading">Lade…</p>
 			<hr class="divider" />
 		</header>
 
 		<section id="link-section" hidden>
 			<!-- Location shortlink (PWA only) -->
 			<div id="location-section-app" style="display:none; padding: 1.5rem 1.5rem 0;">
-				<button type="button" id="location-btn-app" class="btn-primary">
+				<button type="button" id="location-btn-app" class="btn-primary" data-i18n="app.location.button">
 					Standort als Link speichern
 				</button>
 			</div>
 
 			<!-- Create form -->
 			<div class="section-create">
-				<h2 class="section-heading">Neuen Link kürzen</h2>
+				<h2 class="section-heading" data-i18n="app.create.title">Neuen Link kürzen</h2>
 				<form id="create-form">
 					<div class="field">
-						<label for="f-url">Ziel-URL *</label>
+						<label for="f-url" data-i18n="app.create.url">Ziel-URL *</label>
 						<input type="url" id="f-url" name="target_url"
-							placeholder="https://example.com/sehr/langer/pfad" required />
+							data-i18n-placeholder="app.create.url.placeholder" placeholder="https://example.com/sehr/langer/pfad" required />
 					</div>
 					<div class="field-row">
 						<div class="field">
-							<label for="f-title">Titel (optional)</label>
-							<input type="text" id="f-title" name="title" placeholder="Mein Link" />
+							<label for="f-title" data-i18n="app.create.title_field">Titel (optional)</label>
+							<input type="text" id="f-title" name="title" data-i18n-placeholder="app.create.title_field.placeholder" placeholder="Mein Link" />
 						</div>
 						<div class="field">
-							<label for="f-alias">Alias (optional)</label>
-							<input type="text" id="f-alias" name="alias" placeholder="mein-link"
-								pattern="[a-z0-9_-]{3,50}" title="3–50 Zeichen: nur Kleinbuchstaben (a–z), Ziffern, Bindestrich (-), Unterstrich (_)" />
+							<label for="f-alias" data-i18n="app.create.alias">Alias (optional)</label>
+							<input type="text" id="f-alias" name="alias" data-i18n-placeholder="app.create.alias.placeholder" placeholder="mein-link"
+								pattern="[a-z0-9_-]{3,50}" data-i18n-title="app.create.alias.title" title="3–50 Zeichen: nur Kleinbuchstaben (a–z), Ziffern, Bindestrich (-), Unterstrich (_)" />
 						</div>
 					</div>
 					<div class="field">
-						<label for="f-expires">Ablaufdatum (optional)</label>
+						<label for="f-expires" data-i18n="app.create.expires">Ablaufdatum (optional)</label>
 						<input type="datetime-local" id="f-expires" name="expires_at" />
 					</div>
-					<button type="submit" class="btn-primary">Erstellen</button>
+					<button type="submit" class="btn-primary" data-i18n="app.create.submit">Erstellen</button>
 				</form>
 				<p id="create-status"></p>
 			</div>
 
 			<!-- Links list -->
 			<div class="section-links">
-				<h2 class="section-heading">Meine Links</h2>
+				<h2 class="section-heading" data-i18n="app.links.title">Meine Links</h2>
 				<p id="links-status"></p>
-				<div id="links-list"><em>Lade…</em></div>
+				<div id="links-list"><em data-i18n="app.links.loading">Lade…</em></div>
 				<div id="links-spinner" hidden><div class="spinner"></div></div>
 			</div>
 		</section>
 	</div>
 </main>
 
+	<script src="/i18n.js" defer></script>
 <script src="/app.js" defer></script>
 </body>
 </html>

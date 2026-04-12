@@ -1,6 +1,6 @@
-const CACHE = 'aadd-v2';
+const CACHE = 'aadd-v3';
 const STATIC = [
-  '/', '/index.html', '/index.js',
+  '/', '/index.html', '/index.js', '/i18n.js',
   '/manifest.json', '/favicon.ico',
   '/icons/icon-192.png', '/icons/icon-512.png'
 ];

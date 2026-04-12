@@ -3,6 +3,10 @@ function isPWA() {
 		|| window.navigator.standalone === true;
 }
 
+function translate(key, params) {
+	return typeof window.t === "function" ? window.t(key, params) : key;
+}
+
 // Auth check — redirect authenticated users straight to the app
 fetch("/api/me")
 	.then(r => r.json())
@@ -21,15 +25,45 @@ const errorMsg   = document.getElementById("anon-error-msg");
 const successDiv = document.getElementById("anon-success");
 const shortUrlEl = document.getElementById("anon-short-url");
 const copyBtn    = document.getElementById("anon-copy");
+const locationSection = document.getElementById("location-section");
+const locationBtn = document.getElementById("location-btn");
 
-function showError(msg) {
+let errorState = null;
+let copyResetTimer = null;
+let isCopyFeedbackVisible = false;
+let isLocationBusy = false;
+
+function setCopyButtonLabel() {
+	copyBtn.textContent = translate(isCopyFeedbackVisible ? "result.copied" : "result.copy");
+}
+
+function setLocationButtonState(busy) {
+	isLocationBusy = busy;
+	locationBtn.textContent = translate(busy ? "location.detecting" : "location.button");
+	locationBtn.disabled = busy;
+}
+
+function renderErrorState() {
+	if (!errorState) {
+		errorMsg.textContent = "";
+		return;
+	}
+
+	errorMsg.textContent = errorState.key
+		? translate(errorState.key, errorState.params)
+		: errorState.message;
+}
+
+function showError({ key = null, params = null, message = "" } = {}) {
+	errorState = key ? { key, params } : { message };
 	resultDiv.style.display = "block";
 	resultDiv.classList.add("error");
-	errorMsg.textContent = msg;
+	renderErrorState();
 	successDiv.hidden = true;
 }
 
 function showSuccess(shortUrl) {
+	errorState = null;
 	resultDiv.style.display = "block";
 	resultDiv.classList.remove("error");
 	errorMsg.textContent = "";
@@ -55,14 +89,14 @@ form.addEventListener("submit", async (e) => {
 			showSuccess(data.short_url);
 			urlInput.value = "";
 		} else if (resp.status === 429) {
-			showError("Zu viele Anfragen. Bitte warte eine Minute.");
+			showError({ key: "error.ratelimit" });
 		} else if (resp.status === 422) {
-			showError("Diese URL wurde als Spam erkannt und kann nicht gekürzt werden.");
+			showError({ key: "error.spam" });
 		} else {
-			showError(data.error ?? "Ein Fehler ist aufgetreten. Bitte versuche es erneut.");
+			showError({ message: data.error ?? translate("error.generic") });
 		}
 	} catch {
-		showError("Netzwerkfehler. Bitte versuche es erneut.");
+		showError({ key: "error.network" });
 	} finally {
 		submitBtn.disabled = false;
 	}
@@ -71,23 +105,27 @@ form.addEventListener("submit", async (e) => {
 copyBtn.addEventListener("click", () => {
 	const url = shortUrlEl.textContent;
 	navigator.clipboard.writeText(url).then(() => {
-		copyBtn.textContent = "Kopiert!";
-		setTimeout(() => { copyBtn.textContent = "Kopieren"; }, 2000);
+		isCopyFeedbackVisible = true;
+		setCopyButtonLabel();
+		clearTimeout(copyResetTimer);
+		copyResetTimer = setTimeout(() => {
+			isCopyFeedbackVisible = false;
+			setCopyButtonLabel();
+		}, 2000);
 	}).catch(() => {
-		copyBtn.textContent = "Kopieren";
+		isCopyFeedbackVisible = false;
+		setCopyButtonLabel();
 	});
 });
 
 // ── Location short link (PWA only) ───────────────────────────────────────────
 
 if (isPWA() && navigator.geolocation) {
-	document.getElementById("location-section").style.display = "block";
+	locationSection.style.display = "block";
 }
 
-document.getElementById("location-btn").addEventListener("click", () => {
-	const btn = document.getElementById("location-btn");
-	btn.textContent = "Standort wird ermittelt…";
-	btn.disabled = true;
+locationBtn.addEventListener("click", () => {
+	setLocationButtonState(true);
 
 	navigator.geolocation.getCurrentPosition(
 		async (pos) => {
@@ -100,23 +138,36 @@ document.getElementById("location-btn").addEventListener("click", () => {
 					body: JSON.stringify({ target_url: mapsUrl }),
 				});
 				const data = await res.json();
-				if (!res.ok) throw new Error(data.error || "Fehler");
+				if (!res.ok) {
+					showError({ message: data.error || translate("error.generic") });
+					return;
+				}
 				showSuccess(data.short_url);
 			} catch (err) {
-				showError(err.message);
+				showError({ message: err.message || translate("error.generic") });
 			} finally {
-				btn.textContent = "Standort als Kurzlink teilen";
-				btn.disabled = false;
+				setLocationButtonState(false);
 			}
 		},
 		() => {
-			btn.textContent = "Standort als Kurzlink teilen";
-			btn.disabled = false;
-			showError("Standortzugriff verweigert. Bitte Berechtigung in den App-Einstellungen erteilen.");
+			setLocationButtonState(false);
+			showError({ key: "location.denied" });
 		},
 		{ enableHighAccuracy: true, timeout: 10000 }
 	);
 });
+
+document.addEventListener("i18n:change", () => {
+	renderErrorState();
+	setCopyButtonLabel();
+	setLocationButtonState(isLocationBusy);
+	if (!successDiv.hidden) {
+		copyBtn.textContent = translate(isCopyFeedbackVisible ? "result.copied" : "result.copy");
+	}
+});
+
+setCopyButtonLabel();
+setLocationButtonState(false);
 
 // ── Service Worker registration ───────────────────────────────────────────────
 

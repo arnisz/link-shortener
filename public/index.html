@@ -3,7 +3,7 @@
 <head>
 	<meta charset="UTF-8" />
 	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-	<title>aadd.li – dein Link-Kürzer</title>
+	<title data-i18n="page.title">aadd.li – dein Link-Kürzer</title>
 	<link rel="stylesheet" href="/style.css" />
 	<link rel="stylesheet" href="/landing.css" />
 	<meta name="description" content="Kürze lange URLs in Sekunden – kostenlos, ohne Anmeldung.">
@@ -38,39 +38,46 @@
 </head>
 <body>
 <main class="hero">
-	<div class="brand">aadd.li</div>
-	<h1>Einfach Links kürzen – ohne Schnickschnack</h1>
-	<p class="subline">
+	<div class="lang-switcher" aria-label="Sprachauswahl">
+		<button type="button" data-set-lang="de" aria-label="Deutsch" title="Deutsch">🇩🇪</button>
+		<button type="button" data-set-lang="en" aria-label="English" title="English">🇬🇧</button>
+		<button type="button" data-set-lang="es" aria-label="Español" title="Español">🇪🇸</button>
+		<button type="button" data-set-lang="fr" aria-label="Français" title="Français">🇫🇷</button>
+	</div>
+	<div class="brand" data-i18n="brand">aadd.li</div>
+	<h1 data-i18n="hero.title">Einfach Links kürzen – ohne Schnickschnack</h1>
+	<p class="subline" data-i18n="hero.subline">
 		Kürze lange URLs in Sekunden, teile sie sofort und verwalte sie bei Bedarf mit Login.
 	</p>
 
 	<div id="anon-form-wrap">
 		<form class="shortener-form" id="anon-form">
-			<input type="url" id="anon-url" placeholder="https://example.com/langer-link"
-				aria-label="Lange URL eingeben" required autocomplete="off" />
-			<button type="submit" id="anon-submit">Link kürzen</button>
+			<input type="url" id="anon-url" data-i18n-placeholder="form.placeholder"
+				placeholder="https://example.com/langer-link"
+				data-i18n-aria-label="form.arialabel" aria-label="Lange URL eingeben" required autocomplete="off" />
+			<button type="submit" id="anon-submit" data-i18n="form.submit">Link kürzen</button>
 		</form>
 
 		<div id="anon-result">
 			<div id="anon-error-msg"></div>
 			<div id="anon-success" hidden>
 				<span id="anon-short-url"></span>
-				<button id="anon-copy" type="button">Kopieren</button>
-				<div id="anon-notice">Dieser Link läuft in 48 Stunden ab.</div>
-				<div id="anon-cta">Dauerhaft speichern? <a href="/login">Jetzt anmelden →</a></div>
+				<button id="anon-copy" type="button" data-i18n="result.copy">Kopieren</button>
+				<div id="anon-notice" data-i18n="result.expires">Dieser Link läuft in 48 Stunden ab.</div>
+				<div id="anon-cta"><span data-i18n="result.cta_text">Dauerhaft speichern?</span> <a href="/login" data-i18n="result.cta_link">Jetzt anmelden →</a></div>
 			</div>
 		</div>
 	</div>
 
-	<p class="example">
+	<p class="example" data-i18n="form.example">
 		Beispiel: example.com/very/long/link → aadd.li/r/abc12
 	</p>
 
 	<div id="location-section" style="display:none;">
-		<button type="button" id="location-btn">
+		<button type="button" id="location-btn" data-i18n="location.button">
 			Standort als Kurzlink teilen
 		</button>
-		<p class="hint">Erstellt einen Kurzlink zu deinem aktuellen GPS-Standort.</p>
+		<p class="hint" data-i18n="location.hint">Erstellt einen Kurzlink zu deinem aktuellen GPS-Standort.</p>
 	</div>
 
 	<div class="secondary-actions">
@@ -83,16 +90,17 @@
 					<path d="M3.9614 10.71c-.18-.54-.2823-1.1168-.2823-1.71s.1023-1.17.2823-1.71V4.9582H.9574C.3477 6.1732 0 7.5477 0 9s.3477 2.8268.9574 4.0418L3.9614 10.71z" fill="#FBBC05"/>
 					<path d="M9 3.5795c1.3214 0 2.5077.4541 3.4405 1.346l2.5813-2.5814C13.4627.8918 11.4255 0 9 0 5.4818 0 2.4382 2.0168.9574 4.9582L3.9614 7.29C4.6705 5.1627 6.6559 3.5795 9 3.5795z" fill="#EA4335"/>
 				</svg>
-				Mit Google anmelden
+				<span data-i18n="login.button">Mit Google anmelden</span>
 			</button>
 		</a>
-		<p class="hint">Optional für Komfortfunktionen wie Verwalten und Wiederverwenden.</p>
+		<p class="hint" data-i18n="login.hint">Optional für Komfortfunktionen wie Verwalten und Wiederverwenden.</p>
 	</div>
 
 	<nav class="footer-links">
-		<a href="/impressum">Impressum</a>
+		<a href="/impressum" data-i18n="footer.impressum">Impressum</a>
 	</nav>
 </main>
+	<script src="/i18n.js" defer></script>
 <script src="/index.js" defer></script>
 </body>
 </html>
