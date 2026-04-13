@@ -86,7 +86,6 @@ const TRANSLATIONS = {
     'error.app.create':                'Could not create link.',
     'error.app.toggle':                'Could not update link.',
     'error.app.delete':                'Could not delete link.',
-    'app.link.edit.alias.warning':     'Changing the alias will permanently break the existing short URL. Anyone using the old link will get a 404 error. Continue?',
   },
 
   de: {
@@ -176,7 +175,6 @@ const TRANSLATIONS = {
     'error.app.create':                'Link konnte nicht erstellt werden.',
     'error.app.toggle':                'Link konnte nicht aktualisiert werden.',
     'error.app.delete':                'Link konnte nicht gelöscht werden.',
-    'app.link.edit.alias.warning':     'Das Ändern des Alias macht die bestehende Kurz-URL dauerhaft ungültig. Alle, die den alten Link verwenden, erhalten einen 404-Fehler. Fortfahren?',
   },
 
   es: {
@@ -266,7 +264,6 @@ const TRANSLATIONS = {
     'error.app.create':                'No se pudo crear el enlace.',
     'error.app.toggle':                'No se pudo actualizar el enlace.',
     'error.app.delete':                'No se pudo eliminar el enlace.',
-    'app.link.edit.alias.warning':     'Cambiar el alias invalidará permanentemente la URL corta existente. Cualquiera que use el enlace antiguo recibirá un error 404. ¿Continuar?',
   },
 
   fr: {
@@ -356,7 +353,6 @@ const TRANSLATIONS = {
     'error.app.create':                'Impossible de créer le lien.',
     'error.app.toggle':                'Impossible de mettre à jour le lien.',
     'error.app.delete':                'Impossible de supprimer le lien.',
-    'app.link.edit.alias.warning':     "Modifier l'alias invalidera définitivement l'URL courte existante. Toute personne utilisant l'ancien lien recevra une erreur 404. Continuer ?",
   },
 };
 

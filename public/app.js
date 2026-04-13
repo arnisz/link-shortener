@@ -292,17 +292,6 @@ function renderLinkCard(l) {
 		cancelBtn.disabled = true;
 		saveBtn.textContent = "…";
 
-		const aliasChanged = newAlias !== l.short_code;
-		if (aliasChanged) {
-			const confirmed = window.confirm(translate("app.link.edit.alias.warning"));
-			if (!confirmed) {
-				saveBtn.disabled = false;
-				cancelBtn.disabled = false;
-				saveBtn.textContent = translate("app.link.btn.save");
-				return;
-			}
-		}
-
 		try {
 			const res = await fetch(`/api/links/${l.id}/update`, {
 				method: "POST",
