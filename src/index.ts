@@ -8,11 +8,11 @@ async function router(request: Request, env: Env, ctx: ExecutionContext): Promis
 	const url = new URL(request.url);
 	const { pathname, method } = { pathname: url.pathname, method: request.method };
 
-	if (pathname === "/login")                          return handleLogin(request, env);
-	if (pathname === "/api/auth/google/callback")       return handleGoogleCallback(request, env);
-	if (pathname === "/api/me")                         return handleGetMe(request, env);
+	if (pathname === "/login" && method === "GET")                         return handleLogin(request, env);
+	if (pathname === "/api/auth/google/callback" && method === "GET")      return handleGoogleCallback(request, env);
+	if (pathname === "/api/me" && method === "GET")                        return handleGetMe(request, env);
 	if (pathname === "/logout" && method === "POST")    return handleLogout(request, env);
-	if (pathname === "/api/hello")                      return handleHello(env);
+	if (pathname === "/api/hello" && method === "GET")                     return handleHello(env);
 	if (pathname === "/api/links/anonymous" && method === "POST") return handleCreateAnonymousLink(request, env);
 	if (pathname === "/api/links" && method === "POST") return handleCreateLink(request, env);
 	if (pathname === "/api/links" && method === "GET")  return handleGetLinks(request, env);
@@ -24,7 +24,7 @@ async function router(request: Request, env: Env, ctx: ExecutionContext): Promis
 	if (deleteMatch && method === "POST") return handleDeleteLink(deleteMatch[1], request, env);
 
 	const redirectMatch = pathname.match(/^\/r\/([a-zA-Z0-9_-]+)$/);
-	if (redirectMatch) return handleRedirect(redirectMatch[1], env, ctx);
+	if (redirectMatch && method === "GET") return handleRedirect(redirectMatch[1], env, ctx);
 
 	return new Response("Not found", { status: 404 });
 }

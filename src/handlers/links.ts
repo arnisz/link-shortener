@@ -260,19 +260,13 @@ export async function handleUpdateLink(linkId: string, request: Request, env: En
 			setClauses.push("expires_at = ?");
 			values.push(new Date(body.expires_at).toISOString());
 		} else {
-			return new Response(JSON.stringify({ error: "expires_at must be null or a valid future ISO date" }), {
-				status: 400,
-				headers: { "content-type": "application/json; charset=UTF-8" }
-			});
+			return errResponse("expires_at must be null or a valid future ISO date", 400);
 		}
 	}
 
 	if (body.is_active !== undefined) {
 		if (body.is_active !== true && body.is_active !== false && body.is_active !== 0 && body.is_active !== 1) {
-			return new Response(JSON.stringify({ error: "is_active must be a boolean or 0/1" }), {
-				status: 400,
-				headers: { "content-type": "application/json; charset=UTF-8" }
-			});
+			return errResponse("is_active must be a boolean or 0/1", 400);
 		}
 		setClauses.push("is_active = ?");
 		values.push(body.is_active ? 1 : 0);
@@ -329,7 +323,7 @@ export async function handleDeleteLink(linkId: string, request: Request, env: En
 }
 
 /** POST /api/links/anonymous – creates a short link without authentication.
- *  - No alias, no title, no custom expiry (hard 48 h expiry).
+ *  - Uses only target_url and always applies a hard 48 h expiry.
  *  - Subject to spam filter and IP-based rate limiting (10 req/min).
  *  - user_id is stored as NULL.
  */
@@ -410,6 +404,7 @@ export async function handleRedirect(code: string, env: Env, ctx: ExecutionConte
 
 	if (link.is_active === 0) {
 		log("REDIRECT", `Inactive: code="${code}"`);
+		// Note: We return 404 for inactive links to avoid leaking existence of private/disabled links.
 		return new Response("Short link not found", { status: 404 });
 	}
 

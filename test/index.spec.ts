@@ -170,6 +170,35 @@ describe("unknown route", () => {
 	});
 });
 
+describe("method enforcement for GET endpoints", () => {
+	it("returns 404 for POST /api/hello", async () => {
+		const res = await call(makeRequest(`${BASE}/api/hello`, "POST"));
+		expect(res.status).toBe(404);
+	});
+
+	it("returns 404 for POST /api/me", async () => {
+		const res = await call(makeRequest(`${BASE}/api/me`, "POST"));
+		expect(res.status).toBe(404);
+	});
+
+	it("returns 404 for POST /login", async () => {
+		const res = await call(makeRequest(`${BASE}/login`, "POST"));
+		expect(res.status).toBe(404);
+	});
+
+	it("returns 404 for POST /api/auth/google/callback", async () => {
+		const res = await call(makeRequest(`${BASE}/api/auth/google/callback`, "POST"));
+		expect(res.status).toBe(404);
+	});
+
+	it("returns 404 for POST /r/:code", async () => {
+		const { userId } = await seedSession(env.hello_cf_spa_db);
+		await seedLink(env.hello_cf_spa_db, { userId, shortCode: "redir-post", targetUrl: "https://example.com" });
+		const res = await call(makeRequest(`${BASE}/r/redir-post`, "POST"));
+		expect(res.status).toBe(404);
+	});
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/auth/google/callback
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1118,7 +1147,7 @@ describe("Input length limits on POST /api/links", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Alias validation regression – specific accepted / rejected values
 // Prevents regressions where valid aliases were incorrectly rejected,
-// or invalid aliases (uppercase, spaces) were silently accepted.
+// or invalid aliases (e.g. spaces) were silently accepted.
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("Alias validation regression – POST /api/links", () => {
@@ -1167,7 +1196,7 @@ describe("Alias validation regression – POST /api/links", () => {
 		expect(data.short_code).toBe("mein_link");
 	});
 
-	// ── Invalid aliases ───────────────────────────────────────────────────────
+	// ── Additional accepted aliases (case handling) ───────────────────────────
 
 	it('accepts "Google3" (uppercase letter) with 201', async () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
