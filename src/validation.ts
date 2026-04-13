@@ -1,7 +1,7 @@
 import { SHORT_CODE_LENGTH, SHORT_CODE_CHARS } from "./config";
 import { log } from "./utils";
 
-export const ALIAS_REGEX = /^[a-z0-9_-]{3,50}$/;
+export const ALIAS_REGEX = /^[a-zA-Z0-9_-]{3,50}$/;
 export const ALIAS_RESERVED = new Set(["api", "login", "logout", "app", "r"]);
 
 export function generateShortCode(length = SHORT_CODE_LENGTH): string {
@@ -21,12 +21,12 @@ export function isValidHttpUrl(input: string): boolean {
 
 /**
  * Validates alias according to business rules.
- * Rules: 3-50 chars, lowercase letters/digits/hyphen/underscore only.
+ * Rules: 3-50 chars, letters/digits/hyphen/underscore only.
  * Reserved words (api, login, logout, app, r) are forbidden.
  */
 export function validateAlias(alias: string): string | null {
 	if (!ALIAS_REGEX.test(alias)) {
-		return "Alias must be 3\u201350 chars: lowercase letters, digits, hyphen or underscore";
+		return "Alias must be 3\u201350 chars: letters, digits, hyphen or underscore";
 	}
 	if (ALIAS_RESERVED.has(alias)) {
 		return `"${alias}" is a reserved word`;

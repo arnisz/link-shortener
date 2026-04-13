@@ -88,6 +88,18 @@ describe("validateAlias", () => {
 		expect(validateAlias("mein-link")).toBeNull();
 	});
 
+	it("returns null for a valid mixed-case alias", () => {
+		expect(validateAlias("MyLink")).toBeNull();
+	});
+
+	it("returns null for a valid uppercase alias with digits", () => {
+		expect(validateAlias("ABC123")).toBeNull();
+	});
+
+	it("returns null for mixed-case alias with separators", () => {
+		expect(validateAlias("My-Link_2")).toBeNull();
+	});
+
 	it("returns null for an alias with digits and underscore", () => {
 		expect(validateAlias("abc_123")).toBeNull();
 	});
@@ -108,12 +120,12 @@ describe("validateAlias", () => {
 		expect(validateAlias("a".repeat(51))).not.toBeNull();
 	});
 
-	it("returns an error for uppercase letters", () => {
-		expect(validateAlias("MyLink")).not.toBeNull();
-	});
-
 	it("returns an error for spaces", () => {
 		expect(validateAlias("my link")).not.toBeNull();
+	});
+
+	it("returns an error for spaces in mixed-case aliases", () => {
+		expect(validateAlias("My Link")).not.toBeNull();
 	});
 
 	it("returns an error for a reserved word 'api'", () => {
@@ -139,6 +151,10 @@ describe("validateAlias", () => {
 	it("returns an error for a dot in the alias", () => {
 		expect(validateAlias("my.link")).not.toBeNull();
 	});
+
+	it("returns an error for @ in the alias", () => {
+		expect(validateAlias("my@link")).not.toBeNull();
+	});
 });
 
 // ── ALIAS_REGEX ───────────────────────────────────────────────────────────────
@@ -148,12 +164,16 @@ describe("ALIAS_REGEX", () => {
 		expect(ALIAS_REGEX.test("abc123")).toBe(true);
 	});
 
-	it("matches hyphen and underscore", () => {
-		expect(ALIAS_REGEX.test("a-b_c")).toBe(true);
+	it("matches uppercase alphanumeric", () => {
+		expect(ALIAS_REGEX.test("ABC123")).toBe(true);
 	});
 
-	it("does not match uppercase", () => {
-		expect(ALIAS_REGEX.test("Abc")).toBe(false);
+	it("matches mixed case", () => {
+		expect(ALIAS_REGEX.test("AbC123")).toBe(true);
+	});
+
+	it("matches hyphen and underscore", () => {
+		expect(ALIAS_REGEX.test("a-b_c")).toBe(true);
 	});
 
 	it("does not match 2-char strings", () => {

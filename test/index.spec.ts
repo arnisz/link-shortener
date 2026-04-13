@@ -718,7 +718,7 @@ describe("POST /api/links – Phase 2", () => {
 		expect(res.status).toBe(409);
 	});
 
-	it("returns 400 when alias contains uppercase letters", async () => {
+	it("returns 201 when alias contains uppercase letters", async () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
@@ -727,7 +727,9 @@ describe("POST /api/links – Phase 2", () => {
 				body: JSON.stringify({ target_url: "https://example.com", alias: "BadAlias" }),
 			})
 		);
-		expect(res.status).toBe(400);
+		expect(res.status).toBe(201);
+		const data = await res.json<{ short_code: string }>();
+		expect(data.short_code).toBe("BadAlias");
 	});
 
 	it("returns 400 for a reserved alias", async () => {
@@ -1167,7 +1169,7 @@ describe("Alias validation regression – POST /api/links", () => {
 
 	// ── Invalid aliases ───────────────────────────────────────────────────────
 
-	it('rejects "Google3" (uppercase letter) with 400', async () => {
+	it('accepts "Google3" (uppercase letter) with 201', async () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
@@ -1176,9 +1178,9 @@ describe("Alias validation regression – POST /api/links", () => {
 				body: JSON.stringify({ target_url: "https://example.com", alias: "Google3" }),
 			})
 		);
-		expect(res.status).toBe(400);
-		const data = await res.json<{ error: string }>();
-		expect(data.error).toBeTruthy();
+		expect(res.status).toBe(201);
+		const data = await res.json<{ short_code: string }>();
+		expect(data.short_code).toBe("Google3");
 	});
 
 	it('rejects "ab" (too short, < 3 chars) with 400', async () => {
@@ -1220,11 +1222,11 @@ describe("Frontend alias pattern regression (app.html)", () => {
 	// public/app.html is read at config time (Node.js, no Windows path issues)
 	// and injected into the test environment as env.APP_HTML_CONTENT.
 
-	it('uses the correct pattern pattern="[a-z0-9_-]{3,50}"', () => {
+	it('uses the correct pattern pattern="[a-zA-Z0-9_-]{3,50}"', () => {
 		// Hyphen at the end of a character class is unambiguous and does not
 		// need escaping. This matches the backend ALIAS_REGEX validation rule
 		// and works correctly in all modern browsers.
-		expect(env.APP_HTML_CONTENT).toContain('pattern="[a-z0-9_-]{3,50}"');
+		expect(env.APP_HTML_CONTENT).toContain('pattern="[a-zA-Z0-9_-]{3,50}"');
 	});
 
 	it('does NOT use the broken escaped-hyphen variant pattern="[a-z0-9_\\-]{3,50}"', () => {

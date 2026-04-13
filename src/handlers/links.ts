@@ -187,7 +187,7 @@ export async function handleGetLinks(request: Request, env: Env): Promise<Respon
 	});
 }
 
-/** POST /api/links/:id/update – updates title, expires_at, and/or is_active. */
+/** POST /api/links/:id/update – updates title, alias, expires_at, and/or is_active. */
 export async function handleUpdateLink(linkId: string, request: Request, env: Env): Promise<Response> {
 	const user = await getSessionUser(request, env);
 	if (!user) {
@@ -206,7 +206,7 @@ export async function handleUpdateLink(linkId: string, request: Request, env: En
 		return errResponse("Link not found", 404);
 	}
 
-	let body: { title?: unknown; expires_at?: unknown; is_active?: unknown };
+	let body: { title?: unknown; alias?: unknown; expires_at?: unknown; is_active?: unknown };
 	try {
 		body = await request.json();
 	} catch {
@@ -223,6 +223,33 @@ export async function handleUpdateLink(linkId: string, request: Request, env: En
 		}
 		setClauses.push("title = ?");
 		values.push(rawTitle || null);
+	}
+
+	if (body.alias !== undefined) {
+		if (typeof body.alias !== "string") {
+			return errResponse("alias must be a string", 400);
+		}
+
+		const normalizedAlias = body.alias
+			.normalize("NFKC")
+			.replace(/[\u2010\u2011\u2012\u2013\u2014\u2212]/g, "-")
+			.trim();
+
+		const aliasError = validateAlias(normalizedAlias);
+		if (aliasError) {
+			return errResponse(aliasError, 400);
+		}
+
+		const conflict = await env.hello_cf_spa_db
+			.prepare("SELECT id FROM links WHERE short_code = ? AND id != ?")
+			.bind(normalizedAlias, linkId)
+			.first<{ id: string }>();
+		if (conflict) {
+			return errResponse("Alias already in use", 409);
+		}
+
+		setClauses.push("short_code = ?");
+		values.push(normalizedAlias);
 	}
 
 	if (body.expires_at !== undefined) {

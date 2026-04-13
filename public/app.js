@@ -143,9 +143,38 @@ function renderLinkCard(l) {
 	const head = document.createElement("div");
 	head.className = "link-head";
 
-	const title = document.createElement("strong");
-	title.textContent = l.title || l.short_code;
-	head.appendChild(title);
+	const titleDisplay = document.createElement("span");
+	titleDisplay.className = "link-title";
+
+	const aliasDisplay = document.createElement("span");
+	aliasDisplay.className = "link-alias";
+
+	const titleInput = document.createElement("input");
+	titleInput.type = "text";
+	titleInput.value = l.title || "";
+	titleInput.placeholder = translate("app.create.title_field.placeholder");
+	titleInput.className = "link-inline-input";
+	titleInput.style.display = "none";
+
+	const aliasInput = document.createElement("input");
+	aliasInput.type = "text";
+	aliasInput.value = l.short_code;
+	aliasInput.placeholder = translate("app.create.alias.placeholder");
+	aliasInput.title = translate("app.create.alias.title");
+	aliasInput.pattern = "[a-zA-Z0-9_-]{3,50}";
+	aliasInput.className = "link-inline-input link-inline-input-alias";
+	aliasInput.style.display = "none";
+
+	function syncTitleAndAliasDisplay() {
+		titleDisplay.textContent = l.title || l.short_code;
+		aliasDisplay.textContent = `${translate("app.link.edit.alias")}: ${l.short_code}`;
+	}
+	syncTitleAndAliasDisplay();
+
+	head.appendChild(titleDisplay);
+	head.appendChild(aliasDisplay);
+	head.appendChild(titleInput);
+	head.appendChild(aliasInput);
 
 	head.appendChild(makeBadge(l));
 
@@ -159,6 +188,23 @@ function renderLinkCard(l) {
 		copyBtn.addEventListener("click", () => copyToClipboard(l.short_url, copyBtn));
 	}
 	head.appendChild(copyBtn);
+
+	const editBtn = document.createElement("button");
+	editBtn.className = "btn-sm";
+	editBtn.textContent = translate("app.link.btn.edit");
+	head.appendChild(editBtn);
+
+	const saveBtn = document.createElement("button");
+	saveBtn.className = "btn-sm btn-sm-primary";
+	saveBtn.textContent = translate("app.link.btn.save");
+	saveBtn.style.display = "none";
+	head.appendChild(saveBtn);
+
+	const cancelBtn = document.createElement("button");
+	cancelBtn.className = "btn-sm btn-sm-neutral";
+	cancelBtn.textContent = translate("app.link.btn.cancel");
+	cancelBtn.style.display = "none";
+	head.appendChild(cancelBtn);
 
 	const toggleBtn = document.createElement("button");
 	toggleBtn.className = "btn-sm";
@@ -199,6 +245,92 @@ function renderLinkCard(l) {
 	if (l.expires_at) stats += ` · ${translate("app.link.expires")} ${fmtDate(l.expires_at)}`;
 	metaStats.textContent = stats;
 	row.appendChild(metaStats);
+
+	let originalTitle = l.title || "";
+	let originalAlias = l.short_code;
+
+	function enterEditMode() {
+		clearCardError(row);
+		originalTitle = l.title || "";
+		originalAlias = l.short_code;
+		titleInput.value = originalTitle;
+		aliasInput.value = originalAlias;
+
+		titleDisplay.style.display = "none";
+		aliasDisplay.style.display = "none";
+		titleInput.style.display = "";
+		aliasInput.style.display = "";
+		editBtn.style.display = "none";
+		saveBtn.style.display = "";
+		cancelBtn.style.display = "";
+		titleInput.focus();
+	}
+
+	function exitEditMode() {
+		titleDisplay.style.display = "";
+		aliasDisplay.style.display = "";
+		titleInput.style.display = "none";
+		aliasInput.style.display = "none";
+		editBtn.style.display = "";
+		saveBtn.style.display = "none";
+		cancelBtn.style.display = "none";
+	}
+
+	editBtn.addEventListener("click", enterEditMode);
+	cancelBtn.addEventListener("click", () => {
+		titleInput.value = originalTitle;
+		aliasInput.value = originalAlias;
+		clearCardError(row);
+		exitEditMode();
+	});
+
+	saveBtn.addEventListener("click", async () => {
+		const newTitle = titleInput.value.trim();
+		const newAlias = aliasInput.value.trim();
+		clearCardError(row);
+		saveBtn.disabled = true;
+		cancelBtn.disabled = true;
+		saveBtn.textContent = "…";
+
+		const aliasChanged = newAlias !== l.short_code;
+		if (aliasChanged) {
+			const confirmed = window.confirm(translate("app.link.edit.alias.warning"));
+			if (!confirmed) {
+				saveBtn.disabled = false;
+				cancelBtn.disabled = false;
+				saveBtn.textContent = translate("app.link.btn.save");
+				return;
+			}
+		}
+
+		try {
+			const res = await fetch(`/api/links/${l.id}/update`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ title: newTitle, alias: newAlias }),
+			});
+			const data = await res.json().catch(() => ({}));
+			if (!res.ok) {
+				showCardError(row, data.error || translate("error.app.toggle"));
+				return;
+			}
+
+			l.title = data.title ?? (newTitle || null);
+			l.short_code = data.short_code ?? newAlias;
+			l.short_url = data.short_url ?? `${window.location.origin}/r/${l.short_code}`;
+
+			syncTitleAndAliasDisplay();
+			anchor.href = l.short_url;
+			anchor.textContent = l.short_url;
+			exitEditMode();
+		} catch (err) {
+			showCardError(row, err.message || translate("error.app.toggle"));
+		} finally {
+			saveBtn.disabled = false;
+			cancelBtn.disabled = false;
+			saveBtn.textContent = translate("app.link.btn.save");
+		}
+	});
 
 	return row;
 }
@@ -272,6 +404,22 @@ function appendEndMessage(list) {
 	el.id = "links-end";
 	el.textContent = translate("app.links.all_loaded");
 	list.appendChild(el);
+}
+
+function showCardError(card, message) {
+	let errorEl = card.querySelector(".link-card-error");
+	if (!errorEl) {
+		errorEl = document.createElement("p");
+		errorEl.className = "link-card-error";
+		card.appendChild(errorEl);
+	}
+	errorEl.textContent = message;
+}
+
+function clearCardError(card) {
+	const errorEl = card.querySelector(".link-card-error");
+	if (!errorEl) return;
+	errorEl.textContent = "";
 }
 
 // ── Link actions ──────────────────────────────────────────────────────────────
