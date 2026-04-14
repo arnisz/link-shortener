@@ -2,7 +2,7 @@
  * Test suite for POST /api/links/anonymous
  *
  * Covers:
- *   - Valid URL → 200, returns short_url + expires_at (~48 h)
+ *   - Valid URL → 201, returns short_url + expires_at (~48 h)
  *   - Spam URL → 422
  *   - Invalid URL → 400
  *   - Rate limit: 11th request from same IP → 429
@@ -56,9 +56,9 @@ async function postAnonymous(targetUrl: string, ip = CLIENT_IP): Promise<Respons
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("POST /api/links/anonymous", () => {
-	it("returns 200 and a short_url for a valid URL", async () => {
+	it("returns 201 and a short_url for a valid URL", async () => {
 		const res = await postAnonymous("https://example.com/some/long/path");
-		expect(res.status).toBe(200);
+		expect(res.status).toBe(201);
 		const data = await res.json<{ short_url: string; expires_at: string }>();
 		expect(data.short_url).toMatch(/^https?:\/\/.+\/r\/[a-zA-Z0-9]+$/);
 	});
@@ -66,7 +66,7 @@ describe("POST /api/links/anonymous", () => {
 	it("expires_at is approximately 48 hours in the future (±5 minutes)", async () => {
 		const before = Date.now();
 		const res = await postAnonymous("https://example.com/expiry-test");
-		expect(res.status).toBe(200);
+		expect(res.status).toBe(201);
 		const { expires_at } = await res.json<{ short_url: string; expires_at: string }>();
 
 		const expiryMs = new Date(expires_at).getTime();
@@ -132,7 +132,7 @@ describe("POST /api/links/anonymous", () => {
 
 	it("link is stored in DB with user_id = NULL and expires_at set", async () => {
 		const res = await postAnonymous("https://example.com/db-check");
-		expect(res.status).toBe(200);
+		expect(res.status).toBe(201);
 		const { short_url } = await res.json<{ short_url: string; expires_at: string }>();
 
 		// Extract short code from the URL
@@ -171,7 +171,7 @@ describe("POST /api/links/anonymous", () => {
 		// Requests 1–10 must succeed
 		for (let i = 1; i <= 10; i++) {
 			const res = await postAnonymous(url, "5.6.7.8");
-			expect(res.status, `Request ${i} should be 200`).toBe(200);
+			expect(res.status, `Request ${i} should be 201`).toBe(201);
 		}
 
 		// 11th request must be rate-limited
@@ -193,12 +193,12 @@ describe("POST /api/links/anonymous", () => {
 
 		// IP B should still be allowed
 		const resB = await postAnonymous(url, "10.0.0.2");
-		expect(resB.status).toBe(200);
+		expect(resB.status).toBe(201);
 	});
 
 	it("response does not expose user_id", async () => {
 		const res = await postAnonymous("https://example.com/privacy-check");
-		expect(res.status).toBe(200);
+		expect(res.status).toBe(201);
 		const data = await res.json<Record<string, unknown>>();
 		expect("user_id" in data).toBe(false);
 		expect("id" in data).toBe(false);

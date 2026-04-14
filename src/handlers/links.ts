@@ -387,7 +387,7 @@ export async function handleCreateAnonymousLink(request: Request, env: Env): Pro
 	return jsonResponse({
 		short_url: `${env.APP_BASE_URL}/r/${shortCode}`,
 		expires_at: expiresAt,
-	});
+	}, 201);
 }
 
 /** GET /r/:code – redirects to the target URL; increments click count asynchronously. */

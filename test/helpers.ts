@@ -7,7 +7,7 @@
 
 /**
  * Builds a syntactically valid (but cryptographically unsigned) Google ID
- * token that parseGoogleIdToken() in src/index.ts can decode.
+ * token that parseGoogleIdToken() in src/auth/google.ts can decode.
  * The signature segment is a fixed placeholder – it is never verified in the
  * worker code, only the payload is used.
  */

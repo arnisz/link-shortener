@@ -161,9 +161,6 @@ document.addEventListener("i18n:change", () => {
 	renderErrorState();
 	setCopyButtonLabel();
 	setLocationButtonState(isLocationBusy);
-	if (!successDiv.hidden) {
-		copyBtn.textContent = translate(isCopyFeedbackVisible ? "result.copied" : "result.copy");
-	}
 });
 
 setCopyButtonLabel();
