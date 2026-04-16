@@ -1,9 +1,12 @@
-const CACHE = 'aadd-v3';
+const CACHE = 'aadd-v4';
 const STATIC = [
-  '/', '/index.html', '/index.js', '/i18n.js',
+  '/', '/index.html', '/index.js',
   '/manifest.json', '/favicon.ico',
   '/icons/icon-192.png', '/icons/icon-512.png'
 ];
+
+// Always fetch fresh from network; cache is only a fallback when offline.
+const NETWORK_FIRST = ['/i18n.js', '/style.css', '/landing.css'];
 
 const NETWORK_ONLY = ['/api/', '/app.html', '/app.js'];
 
@@ -19,10 +22,25 @@ self.addEventListener('activate', e => e.waitUntil(
 
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
+
   if (NETWORK_ONLY.some(p => url.pathname.startsWith(p))) {
     e.respondWith(fetch(e.request));
     return;
   }
+
+  if (NETWORK_FIRST.some(p => url.pathname === p)) {
+    e.respondWith(
+      fetch(e.request)
+        .then(r => {
+          const clone = r.clone();
+          caches.open(CACHE).then(c => c.put(e.request, clone));
+          return r;
+        })
+        .catch(() => caches.match(e.request))
+    );
+    return;
+  }
+
   e.respondWith(
     caches.match(e.request).then(r => r || fetch(e.request))
   );
