@@ -14,9 +14,11 @@ For all limits and quotas, retrieve from the product's `/platform/limits/` page.
 **aadd.li** — a serverless link shortener. Backend: Cloudflare Workers + D1. Frontend: static files in `public/` (SPA, served via Workers Assets).
 
 - Entry point: `src/index.ts` — plain `if`-chain router, no framework
-- Handlers: `src/handlers/` (auth, links, hello)
+- Handlers: `src/handlers/` (`auth.ts`, `links.ts`)
 - Auth: Google OAuth (`src/auth/google.ts`, `src/auth/session.ts`)
-- Shared helpers: `src/utils.ts` (`jsonResponse`, `errResponse`, `applySecurityHeaders`, `log`)
+- CSRF protection: `src/csrf.ts` (`validateCsrf`, `validateCsrfToken`, `generateCsrfToken`)
+- Rate limiting: `src/rateLimit.ts` (`checkRateLimit`, `extractClientIp`)
+- Shared helpers: `src/utils.ts` (`jsonResponse`, `errResponse`, `applySecurityHeaders`, `log`, `randomId`, `escapeHtml`, `getCookie`)
 - Constants/limits: `src/config.ts`
 - Input validation: `src/validation.ts`
 - DB schema migrations: `sql/` (apply in order: `init.sql` → `auth.sql` → `links.sql` → …)
@@ -68,22 +70,28 @@ For remote (production): replace `--local` with `--remote`.
 | GET | `/api/auth/google/callback` | `handleGoogleCallback` |
 | GET | `/api/me` | `handleGetMe` |
 | POST | `/logout` | `handleLogout` |
-| GET | `/api/hello` | `handleHello` |
 | POST | `/api/links/anonymous` | `handleCreateAnonymousLink` |
 | POST | `/api/links` | `handleCreateLink` |
-| GET | `/api/links` | `handleGetLinks` |
+| GET | `/api/links` | `handleGetLinks` (cursor-based pagination: `?cursor=ISO\|id&limit=N`, default 50, max 100) |
 | POST | `/api/links/:code/update` | `handleUpdateLink` |
 | POST | `/api/links/:code/delete` | `handleDeleteLink` |
-| GET | `/r/:code` | `handleRedirect` (307 redirect) |
+| GET | `/r/:code` | `handleRedirect` (302 redirect) |
 
 ## Conventions
 
 - **Security headers** are applied globally in `applySecurityHeaders` (called in `fetch`); do not set them per-handler.
 - **Error responses** always use `errResponse(message, status)` — never raw `new Response` for errors.
-- **Session cookie** name is `sid`; managed via `makeSessionCookie` / `clearSessionCookie`.
+- **Session cookie** name is `__Host-sid`; managed via `makeSessionCookie` / `clearSessionCookie`. The `__Host-` prefix enforces Secure, Path=/, and no Domain attribute.
+- **CSRF — two-layer protection**:
+  1. Global: `validateCsrf(request, env)` in the router rejects cross-origin POSTs missing `X-Requested-With` (legacy layer, `src/csrf.ts`).
+  2. Per-handler: `validateCsrfToken(request, userId, SESSION_SECRET)` checks the `X-CSRF-Token` header (HMAC-SHA256 of session ID) for all authenticated mutation endpoints (`handleCreateLink`, `handleUpdateLink`, `handleDeleteLink`).
+  - Clients must send `X-CSRF-Token: <token>` obtained from `generateCsrfToken(sessionId, secret)`.
+- **Rate limiting**: `checkRateLimit(key, db, limit?)` from `src/rateLimit.ts`; uses D1 `rate_limits` table with 1-minute tumbling windows. Default limit = 10 req/min. Keys are scoped by use-case: plain IP for anonymous links (10/min), `login:<ip>` for login (5/min), `redirect:<ip>` for redirects (60/min).
+- **Spam filter**: `checkSpamFilter(url, db)` from `src/validation.ts` — applied to anonymous link creation; returns `true` if blocked.
 - **Short codes**: 6-char alphanumeric, bias-free generation in `generateShortCode` (`src/validation.ts`).
 - **Alias reserved words**: `["api", "login", "logout", "app", "r"]` — checked in `ALIAS_RESERVED`.
 - **Logging**: use `log(category, message)` from `src/utils.ts`; it wraps `console.log` with `[category]` prefix.
+- **HTML escaping**: use `escapeHtml(str)` from `src/utils.ts` for any user-supplied content embedded in HTML contexts.
 - **No external npm runtime deps** — only devDependencies (wrangler, vitest, typescript).
 
 ## Node.js Compatibility

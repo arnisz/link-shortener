@@ -17,7 +17,8 @@ export async function handleGetMe(request: Request, env: Env): Promise<Response>
 
 /** POST /logout – clears session and redirects to /. */
 export async function handleLogout(request: Request, env: Env): Promise<Response> {
-	const sid = getCookie(request, "sid");
+	// 🔴 SICHERHEIT: Lese beide Cookie-Namen (Fallback für alte Sessions)
+	const sid = getCookie(request, "__Host-sid") ?? getCookie(request, "sid");
 	if (sid) {
 		await env.hello_cf_spa_db
 			.prepare("DELETE FROM sessions WHERE id = ?")

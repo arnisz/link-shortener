@@ -12,6 +12,16 @@ Core features:
 - Input validation and abuse-resistant design
 - Fully test-covered backend (Vitest)
 
+Security features (April 2026):
+- 🔒 Open Redirect Protection (URL Schema Whitelist + SSRF Prevention)
+- 🔒 TOCTOU-Resistant Access Control (Atomic permission checks)
+- 🔒 XSS Prevention (HTML escaping utilities)
+- 🔒 Rate Limiting (Cloudflare CF-Connecting-IP aware)
+- 🔒 Session Security (__Host- Cookie Prefix)
+- 🔒 CSRF Protection (Token-based + Legacy Origin checks)
+
+**See [SECURITY_PATCHES.md](./SECURITY_PATCHES.md) for detailed security implementation.**
+
 Technical highlights:
 - Cloudflare Workers (edge runtime)
 - Cloudflare D1 (SQLite-based serverless database)

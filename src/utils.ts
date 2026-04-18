@@ -5,6 +5,19 @@ export function base64UrlDecode(input: string): string {
 	return atob(input);
 }
 
+/**
+ * 🔴 SICHERHEIT: HTML-Escaping für alle User-Inputs in HTML-Contexts.
+ * Verhindert Stored XSS wenn Alias/URLs ungefiltert in HTML eingebettet werden.
+ */
+export function escapeHtml(unsafe: string): string {
+	return unsafe
+		.replace(/&/g, '&amp;')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;')
+		.replace(/"/g, '&quot;')
+		.replace(/'/g, '&#x27;');
+}
+
 export async function randomId(bytes = 24): Promise<string> {
 	const arr = new Uint8Array(bytes);
 	crypto.getRandomValues(arr);
@@ -25,9 +38,17 @@ export function getCookie(request: Request, name: string): string | null {
 	return null;
 }
 
+/**
+ * 🔴 SICHERHEIT: Session-Cookie mit __Host--Präfix.
+ * __Host- erzwingt:
+ *   - Secure Flag (nur HTTPS)
+ *   - Path=/ (gesamte Domain)
+ *   - Kein Domain-Attribut (keine Subdomain-Übernahme möglich)
+ * Verhindert Cookie Injection über Subdomains (*.aadd.li).
+ */
 export function makeSessionCookie(sessionId: string, maxAgeSeconds: number): string {
 	return [
-		`sid=${sessionId}`,
+		`__Host-sid=${sessionId}`,
 		"Path=/",
 		"HttpOnly",
 		"Secure",
@@ -38,7 +59,7 @@ export function makeSessionCookie(sessionId: string, maxAgeSeconds: number): str
 
 export function clearSessionCookie(): string {
 	return [
-		"sid=",
+		"__Host-sid=",
 		"Path=/",
 		"HttpOnly",
 		"Secure",

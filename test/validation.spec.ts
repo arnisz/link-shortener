@@ -15,6 +15,7 @@ import {
 	_resetSpamKeywordCache,
 	ALIAS_REGEX,
 	ALIAS_RESERVED,
+	buildGeoUrl,
 } from "../src/validation";
 import { SHORT_CODE_CHARS } from "../src/config";
 
@@ -363,3 +364,40 @@ describe("checkSpamFilter cache", () => {
 		expect(callCount).toBe(1);
 	});
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// buildGeoUrl — CRIT-2: SSRF-Schutz bei Geo-Link-Konstruktion
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("buildGeoUrl", () => {
+	it("generates a valid maps URL for correct coordinates", () => {
+		const url = buildGeoUrl("48.137154", "11.576124");
+		expect(url).toBe("https://maps.google.com/maps?q=48.137154%2C11.576124");
+	});
+
+	it("throws for non-numeric lat", () => {
+		expect(() => buildGeoUrl("abc", "11.5")).toThrow("Invalid coordinates");
+	});
+
+	it("throws for non-numeric lng", () => {
+		expect(() => buildGeoUrl("48.1", "xyz")).toThrow("Invalid coordinates");
+	});
+
+	it("throws when latitude out of range", () => {
+		expect(() => buildGeoUrl("91.0", "0.0")).toThrow("Latitude out of range");
+	});
+
+	it("throws when longitude out of range", () => {
+		expect(() => buildGeoUrl("0.0", "181.0")).toThrow("Longitude out of range");
+	});
+
+	it("blocks injection attempts in lat", () => {
+		expect(() => buildGeoUrl("48.1&foo=bar", "11.5")).toThrow("Invalid coordinates");
+	});
+
+	it("blocks negative latitude at boundary", () => {
+		const url = buildGeoUrl("-90.0", "0.0");
+		expect(url).toContain("q=-90%2C0");
+	});
+});
+

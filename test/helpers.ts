@@ -51,20 +51,11 @@ export function makeRequest(
 // ── D1 test database setup ────────────────────────────────────────────────────
 
 /**
- * Applies the two SQL migration files (init.sql + auth.sql) to a test D1
- * database.  Each statement is executed individually to stay compatible with
+ * Applies the auth.sql migrations to a test D1 database.
+ * Each statement is executed individually to stay compatible with
  * every miniflare D1 version.
  */
 export async function setupTestDb(db: D1Database): Promise<void> {
-	// ── counters (init.sql) ──
-	// Note: db.prepare().run() is used instead of db.exec() because miniflare's
-	// exec() parser processes SQL line-by-line, which breaks multi-line statements.
-	await db
-		.prepare(`CREATE TABLE IF NOT EXISTS counters (name TEXT PRIMARY KEY, value INTEGER NOT NULL)`)
-		.run();
-	await db
-		.prepare(`INSERT OR IGNORE INTO counters (name, value) VALUES ('hello', 0)`)
-		.run();
 
 	// ── users (auth.sql) ──
 	await db

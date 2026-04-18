@@ -1,15 +1,32 @@
 import type { Env } from "../types";
 import { TARGET_URL_MAX_LEN, TITLE_MAX_LEN, SHORT_CODE_GENERATION_RETRIES } from "../config";
 import { randomId, jsonResponse, errResponse, log } from "../utils";
-import { isValidHttpUrl, validateAlias, isValidFutureIso, requireJson, generateShortCode, checkSpamFilter } from "../validation";
+import { isValidHttpUrl, validateAlias, isValidFutureIso, requireJson, generateShortCode, checkSpamFilter, validateTargetUrl } from "../validation";
 import { checkRateLimit } from "../rateLimit";
 import { getSessionUser } from "../auth/session";
+import { validateCsrfToken } from "../csrf";
 
 /** POST /api/links – creates a new shortened link. Requires authentication. */
 export async function handleCreateLink(request: Request, env: Env): Promise<Response> {
 	const user = await getSessionUser(request, env);
 	if (!user) {
 		return errResponse("Unauthorized", 401);
+	}
+
+	// 🔴 SICHERHEIT: CSRF-Schutz kombiniert: Token-basiert + Legacy Origin/X-Requested-With
+	const origin = request.headers.get("Origin");
+	const hasXRequestedWith = !!request.headers.get("X-Requested-With");
+	const hasValidToken = validateCsrfToken(request, user.id, env.SESSION_SECRET);
+
+	// Keine Origin Header = Non-Browser Client → OK
+	// Origin vorhanden, aber foreign → CSRF Attack
+	// Origin matches && valid token ODER (legacy) X-Requested-With → OK
+	// Sonst → blocked
+	if (origin && origin !== env.APP_BASE_URL) {
+		return errResponse("Invalid CSRF token", 403);
+	}
+	if (origin === env.APP_BASE_URL && !hasValidToken && !hasXRequestedWith) {
+		return errResponse("Invalid CSRF token", 403);
 	}
 
 	if (!requireJson(request)) {
@@ -194,16 +211,20 @@ export async function handleUpdateLink(linkId: string, request: Request, env: En
 		return errResponse("Unauthorized", 401);
 	}
 
-	if (!requireJson(request)) {
-		return errResponse("Content-Type must be application/json", 415);
+	// 🔴 SICHERHEIT: CSRF-Schutz kombiniert: Token-basiert + Legacy Origin/X-Requested-With
+	const origin = request.headers.get("Origin");
+	const hasXRequestedWith = !!request.headers.get("X-Requested-With");
+	const hasValidToken = validateCsrfToken(request, user.id, env.SESSION_SECRET);
+
+	if (origin && origin !== env.APP_BASE_URL) {
+		return errResponse("Invalid CSRF token", 403);
+	}
+	if (origin === env.APP_BASE_URL && !hasValidToken && !hasXRequestedWith) {
+		return errResponse("Invalid CSRF token", 403);
 	}
 
-	const owned = await env.hello_cf_spa_db
-		.prepare("SELECT id FROM links WHERE id = ? AND user_id = ?")
-		.bind(linkId, user.id)
-		.first<{ id: string }>();
-	if (!owned) {
-		return errResponse("Link not found", 404);
+	if (!requireJson(request)) {
+		return errResponse("Content-Type must be application/json", 415);
 	}
 
 	let body: { title?: unknown; alias?: unknown; expires_at?: unknown; is_active?: unknown };
@@ -277,12 +298,20 @@ export async function handleUpdateLink(linkId: string, request: Request, env: En
 	}
 
 	setClauses.push("updated_at = ?");
+	// 🔴 SICHERHEIT: user_id DIREKT in WHERE-Clause für Ownership-Check
+	// Atomic operation verhindert TOCTOU Race Conditions
 	values.push(new Date().toISOString(), linkId, user.id);
 
-	await env.hello_cf_spa_db
+	const result = await env.hello_cf_spa_db
 		.prepare(`UPDATE links SET ${setClauses.join(", ")} WHERE id = ? AND user_id = ?`)
 		.bind(...values)
 		.run();
+
+	// D1 gibt meta.changes zurück — 0 = nicht gefunden ODER nicht Owner
+	// Bewusst KEINE Unterscheidung: verhindert User Enumeration
+	if (result.meta.changes === 0) {
+		return errResponse("Link not found or access denied", 404);
+	}
 
 	const updated = await env.hello_cf_spa_db
 		.prepare(
@@ -306,18 +335,32 @@ export async function handleDeleteLink(linkId: string, request: Request, env: En
 		return errResponse("Unauthorized", 401);
 	}
 
-	const owned = await env.hello_cf_spa_db
-		.prepare("SELECT id FROM links WHERE id = ? AND user_id = ?")
-		.bind(linkId, user.id)
-		.first<{ id: string }>();
-	if (!owned) {
-		return errResponse("Link not found", 404);
+	// 🔴 SICHERHEIT: CSRF-Schutz kombiniert: Token-basiert + Legacy Origin/X-Requested-With
+	const origin = request.headers.get("Origin");
+	const hasXRequestedWith = !!request.headers.get("X-Requested-With");
+	const hasValidToken = validateCsrfToken(request, user.id, env.SESSION_SECRET);
+
+	if (origin && origin !== env.APP_BASE_URL) {
+		return errResponse("Invalid CSRF token", 403);
+	}
+	if (origin === env.APP_BASE_URL && !hasValidToken && !hasXRequestedWith) {
+		return errResponse("Invalid CSRF token", 403);
 	}
 
-	await env.hello_cf_spa_db
-		.prepare("DELETE FROM links WHERE id = ? AND user_id = ?")
+	// 🔴 SICHERHEIT: user_id DIREKT in WHERE-Clause
+	// Atomic operation verhindert TOCTOU Race Conditions
+	const result = await env.hello_cf_spa_db
+		.prepare(
+			`DELETE FROM links WHERE id = ? AND user_id = ?`
+		)
 		.bind(linkId, user.id)
 		.run();
+
+	// Bewusst KEINE Unterscheidung zwischen "Not found" und "Forbidden" (404)
+	// Verhindert User Enumeration Attacken via Statuscode
+	if (result.meta.changes === 0) {
+		return errResponse("Link not found or access denied", 404);
+	}
 
 	return jsonResponse({ ok: true });
 }
@@ -411,14 +454,25 @@ export async function handleRedirect(code: string, env: Env, ctx: ExecutionConte
 
 	if (link.is_active === 0) {
 		log("REDIRECT", `Inactive: code="${code}"`);
-		// Note: We return 404 for inactive links to avoid leaking existence of private/disabled links.
 		return new Response("Short link not found", { status: 404 });
 	}
 
+	// MED-2: Einheitlich 404 statt 410 — verhindert Code-Enumeration via Status-Code-Unterschied.
+	// Angreifer können sonst via 410 erkennen, ob ein Code jemals existiert hat.
 	if (link.expires_at !== null && new Date(link.expires_at).getTime() < Date.now()) {
 		log("REDIRECT", `Expired: code="${code}"`);
-		return new Response("Link has expired", { status: 410 });
+		return new Response("Short link not found", { status: 404 });
 	}
+
+	// 🔴 SICHERHEIT: Strikte URL-Validierung auch bei Redirect
+	// Verhindert javascript:, data: URIs und Private IP Injection
+	const validation = validateTargetUrl(link.target_url);
+	if (!validation.ok) {
+		log('redirect', `Blocked invalid stored URL for code ${code}: ${validation.error}`);
+		return errResponse('Invalid redirect target', 500);
+	}
+
+	const destination = validation.url.href;
 
 	ctx.waitUntil(
 		env.hello_cf_spa_db
@@ -427,5 +481,5 @@ export async function handleRedirect(code: string, env: Env, ctx: ExecutionConte
 			.run()
 	);
 
-	return new Response(null, { status: 302, headers: { Location: link.target_url } });
+	return new Response(null, { status: 302, headers: { Location: destination } });
 }

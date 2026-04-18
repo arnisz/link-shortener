@@ -26,6 +26,7 @@ const TRANSLATIONS = {
     'error.generic':       'An error occurred. Please try again.',
     'error.network':       'Network error. Please try again.',
     'footer.impressum':    'Imprint',
+    'footer.privacy':      'Privacy',
 
     // ── SEO Content ─────────────────────────────────────────────────────────────
     'seo.title':          'Free URL Shortener with Expiring Links',
@@ -116,6 +117,7 @@ const TRANSLATIONS = {
     'error.generic':       'Ein Fehler ist aufgetreten. Bitte versuche es erneut.',
     'error.network':       'Netzwerkfehler. Bitte versuche es erneut.',
     'footer.impressum':    'Impressum',
+    'footer.privacy':      'Datenschutz',
 
     // ── SEO Content ─────────────────────────────────────────────────────────────
     'seo.title':          'Kostenloser Link-Kürzer mit ablaufenden Links',
@@ -206,6 +208,7 @@ const TRANSLATIONS = {
     'error.generic':       'Ocurrió un error. Por favor, inténtalo de nuevo.',
     'error.network':       'Error de red. Por favor, inténtalo de nuevo.',
     'footer.impressum':    'Aviso legal',
+    'footer.privacy':      'Privacidad',
 
     // ── SEO Content ─────────────────────────────────────────────────────────────
     'seo.title':          'Acortador de URLs gratuito con enlaces que caducan',
@@ -296,6 +299,7 @@ const TRANSLATIONS = {
     'error.generic':       "Une erreur s'est produite. Veuillez réessayer.",
     'error.network':       'Erreur réseau. Veuillez réessayer.',
     'footer.impressum':    'Mentions légales',
+    'footer.privacy':      'Confidentialité',
 
     // ── SEO Content ─────────────────────────────────────────────────────────────
     'seo.title':          'Raccourcisseur d\'URL gratuit avec liens expirables',
@@ -483,14 +487,17 @@ function syncLanguageButtons(root = document) {
     el.setAttribute('aria-pressed', String(isActive));
   });
 
-  const fallbackButtons = root.querySelectorAll('.lang-switcher button');
-  if (fallbackButtons.length) {
-    const orderedLangs = ['en', 'de', 'es', 'fr'];
-    fallbackButtons.forEach((btn, index) => {
-      const isActive = orderedLangs[index] === lang;
-      btn.classList.toggle('active', isActive);
-      btn.setAttribute('aria-pressed', String(isActive));
-    });
+  const dataAttrButtons = root.querySelectorAll('[data-set-lang], [data-lang]');
+  if (!dataAttrButtons.length) {
+    const fallbackButtons = root.querySelectorAll('.lang-switcher button');
+    if (fallbackButtons.length) {
+      const orderedLangs = ['en', 'de', 'es', 'fr'];
+      fallbackButtons.forEach((btn, index) => {
+        const isActive = orderedLangs[index] === lang;
+        btn.classList.toggle('active', isActive);
+        btn.setAttribute('aria-pressed', String(isActive));
+      });
+    }
   }
 }
 

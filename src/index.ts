@@ -1,7 +1,6 @@
 import type { Env } from "./types";
 import { handleGetMe, handleLogout, handleLogin, handleGoogleCallback } from "./handlers/auth";
 import { handleCreateLink, handleGetLinks, handleUpdateLink, handleDeleteLink, handleRedirect, handleCreateAnonymousLink } from "./handlers/links";
-import { handleHello } from "./handlers/hello";
 import { applySecurityHeaders, errResponse } from "./utils";
 import { validateCsrf } from "./csrf";
 
@@ -17,8 +16,7 @@ async function router(request: Request, env: Env, ctx: ExecutionContext): Promis
 	if (pathname === "/login" && method === "GET")                         return handleLogin(request, env);
 	if (pathname === "/api/auth/google/callback" && method === "GET")      return handleGoogleCallback(request, env);
 	if (pathname === "/api/me" && method === "GET")                        return handleGetMe(request, env);
-	if (pathname === "/logout" && method === "POST")    return handleLogout(request, env);
-	if (pathname === "/api/hello" && method === "GET")                     return handleHello(env);
+	if (pathname === "/logout" && method === "POST")                       return handleLogout(request, env);
 	if (pathname === "/api/links/anonymous" && method === "POST") return handleCreateAnonymousLink(request, env);
 	if (pathname === "/api/links" && method === "POST") return handleCreateLink(request, env);
 	if (pathname === "/api/links" && method === "GET")  return handleGetLinks(request, env);

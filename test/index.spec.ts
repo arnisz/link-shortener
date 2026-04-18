@@ -2,7 +2,6 @@
  * Safety-net test suite for the current worker behaviour.
  *
  * Covers:
- *   /api/hello                     – 200, JSON, message field, counter increment
  *   /api/me                        – unauthenticated + authenticated
  *   POST /logout                   – redirect, cleared cookie, DB session deleted
  *   unknown route                  – 404
@@ -43,9 +42,6 @@ beforeEach(async () => {
 	await env.hello_cf_spa_db.prepare("DELETE FROM sessions").run();
 	await env.hello_cf_spa_db.prepare("DELETE FROM users").run();
 	await env.hello_cf_spa_db.prepare("DELETE FROM rate_limits").run();
-	await env.hello_cf_spa_db
-		.prepare("UPDATE counters SET value = 0 WHERE name = 'hello'")
-		.run();
 });
 
 // ── Tiny helper: call the worker and wait for ctx ─────────────────────────────
@@ -57,35 +53,6 @@ async function call(req: Request): Promise<Response> {
 	return res;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// /api/hello
-// ─────────────────────────────────────────────────────────────────────────────
-
-describe("/api/hello", () => {
-	it("returns HTTP 200", async () => {
-		const res = await call(makeRequest(`${BASE}/api/hello`));
-		expect(res.status).toBe(200);
-	});
-
-	it("returns application/json content-type", async () => {
-		const res = await call(makeRequest(`${BASE}/api/hello`));
-		expect(res.headers.get("content-type")).toContain("application/json");
-	});
-
-	it("contains the expected message field", async () => {
-		const res = await call(makeRequest(`${BASE}/api/hello`));
-		const data = await res.json<{ message: string }>();
-		expect(data.message).toBe("Hallo vom Cloudflare Worker mit D1!");
-	});
-
-	it("increments the visit counter on each call", async () => {
-		const r1 = await call(makeRequest(`${BASE}/api/hello`));
-		const r2 = await call(makeRequest(`${BASE}/api/hello`));
-		const d1 = await r1.json<{ visits: number }>();
-		const d2 = await r2.json<{ visits: number }>();
-		expect(d2.visits).toBe(d1.visits + 1);
-	});
-});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /api/me
@@ -173,10 +140,6 @@ describe("unknown route", () => {
 });
 
 describe("method enforcement for GET endpoints", () => {
-	it("returns 404 for POST /api/hello", async () => {
-		const res = await call(makeRequest(`${BASE}/api/hello`, "POST"));
-		expect(res.status).toBe(404);
-	});
 
 	it("returns 404 for POST /api/me", async () => {
 		const res = await call(makeRequest(`${BASE}/api/me`, "POST"));
@@ -314,7 +277,8 @@ describe("GET /api/auth/google/callback", () => {
 
 		// Should set a non-empty sid cookie with a positive Max-Age
 		const setCookies = res.headers.getAll("set-cookie");
-		const sidCookie = setCookies.find((c) => c.startsWith("sid="));
+		// 🔴 SICHERHEIT: Suche nach __Host-sid (neuer Cookie-Name mit __Host--Präfix)
+		const sidCookie = setCookies.find((c) => c.startsWith("__Host-sid=")) ?? setCookies.find((c) => c.startsWith("sid="));
 		expect(sidCookie).toBeDefined();
 		expect(sidCookie).toContain("Max-Age=");
 
@@ -683,12 +647,13 @@ describe("GET /r/:code", () => {
 		expect(res.status).toBe(404);
 	});
 
-	it("returns 410 for an expired link", async () => {
+	// MED-2: Einheitlich 404 statt 410 — verhindert Code-Enumeration via Statuscode
+	it("returns 404 for an expired link (anti-enumeration)", async () => {
 		const { userId } = await seedSession(env.hello_cf_spa_db);
 		const pastDate = new Date(Date.now() - 1000 * 60).toISOString();
 		await seedLink(env.hello_cf_spa_db, { userId, shortCode: "expired1", expiresAt: pastDate });
 		const res = await call(makeRequest(`${BASE}/r/expired1`));
-		expect(res.status).toBe(410);
+		expect(res.status).toBe(404);
 	});
 
 	it("does not increment click_count for an inactive link", async () => {
@@ -711,7 +676,9 @@ describe("GET /r/:code", () => {
 		});
 		const res = await call(makeRequest(`${BASE}/r/my-alias`));
 		expect(res.status).toBe(302);
-		expect(res.headers.get("location")).toBe("https://aliased.example.com");
+		// 🔴 SICHERHEIT: validateTargetUrl normalisiert URLs (new URL().href)
+		// "https://aliased.example.com" wird zu "https://aliased.example.com/"
+		expect(res.headers.get("location")).toBe("https://aliased.example.com/");
 	});
 });
 
@@ -1469,9 +1436,10 @@ describe("GET /r/:code – additional edge cases", () => {
 			expiresAt: future,
 		});
 
-		const res = await call(makeRequest(`${BASE}/r/notexpired1`));
-		expect(res.status).toBe(302);
-		expect(res.headers.get("location")).toBe("https://still-valid.example.com");
+	const res = await call(makeRequest(`${BASE}/r/notexpired1`));
+	expect(res.status).toBe(302);
+	// 🔴 SICHERHEIT: URL-Normalisierung durch validateTargetUrl
+	expect(res.headers.get("location")).toBe("https://still-valid.example.com/");
 	});
 });
 

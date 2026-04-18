@@ -32,6 +32,45 @@ export function isValidHttpUrl(input: string): boolean {
 }
 
 /**
+ * Strikte Validierung der Ziel-URL mit Schema-Whitelist und SSRF-Schutz.
+ * Verhindert: javascript:, data:, file: URIs und Zugriffe auf Private/Interne IPs.
+ */
+const ALLOWED_SCHEMES = ['https:', 'http:'] as const;
+
+export function validateTargetUrl(raw: string): { ok: true; url: URL } | { ok: false; error: string } {
+	let parsed: URL;
+	try {
+		parsed = new URL(raw);
+	} catch {
+		return { ok: false, error: 'Invalid URL format' };
+	}
+
+	// Schema-Whitelist erzwingen
+	if (!ALLOWED_SCHEMES.includes(parsed.protocol as typeof ALLOWED_SCHEMES[number])) {
+		return { ok: false, error: 'Only http:// and https:// URLs are allowed' };
+	}
+
+	// SSRF-Schutz: Blockiere Private/Internal IPs
+	const hostname = parsed.hostname.toLowerCase();
+	if (
+		hostname === 'localhost' ||
+		hostname === '127.0.0.1' ||
+		hostname === '::1' ||
+		hostname.endsWith('.internal') ||
+		hostname.endsWith('.localhost') ||
+		/^10\.\d+\.\d+\.\d+$/.test(hostname) ||
+		/^192\.168\.\d+\.\d+$/.test(hostname) ||
+		/^172\.(1[6-9]|2\d|3[01])\.\d+\.\d+$/.test(hostname) ||
+		/^fc[0-9a-f]{2}:/i.test(hostname) || // IPv6 ULA
+		/^fe80:/i.test(hostname)  // IPv6 Link-Local
+	) {
+		return { ok: false, error: 'Private/internal URLs are not allowed' };
+	}
+
+	return { ok: true, url: parsed };
+}
+
+/**
  * Validates alias according to business rules.
  * Rules: 3-50 chars, letters/digits/hyphen/underscore only.
  * Reserved words (api, login, logout, app, r) are forbidden.
@@ -45,6 +84,28 @@ export function validateAlias(alias: string): string | null {
 		return `"${alias}" is a reserved word`;
 	}
 	return null;
+}
+
+/**
+ * CRIT-2: SSRF-Schutz bei Geo-Link-Konstruktion.
+ * Validiert Koordinaten strikt und konstruiert eine sichere Maps-URL
+ * ohne String-Interpolation von User-Input.
+ */
+const COORD_REGEX = /^-?\d{1,3}\.\d{1,15}$/;
+
+export function buildGeoUrl(lat: string, lng: string): string {
+	if (!COORD_REGEX.test(lat) || !COORD_REGEX.test(lng)) {
+		throw new Error("Invalid coordinates");
+	}
+	const latNum = parseFloat(lat);
+	const lngNum = parseFloat(lng);
+
+	if (latNum < -90 || latNum > 90) throw new Error("Latitude out of range");
+	if (lngNum < -180 || lngNum > 180) throw new Error("Longitude out of range");
+
+	// Koordinaten werden NICHT als String interpoliert, sondern als URLSearchParams
+	const params = new URLSearchParams({ q: `${latNum},${lngNum}` });
+	return `https://maps.google.com/maps?${params.toString()}`;
 }
 
 /** Returns true if the input is a valid ISO date strictly in the future. */
