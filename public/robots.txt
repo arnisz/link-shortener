@@ -1,14 +1,17 @@
-# Erlaube Suchmaschinen-Crawler explizit
+# Allow major search engines, but block redirect paths
 User-agent: Googlebot
-Disallow:
+Allow: /
+Disallow: /r/
 
 User-agent: Bingbot
-Disallow:
+Allow: /
+Disallow: /r/
 
 User-agent: DuckDuckBot
-Disallow:
+Allow: /
+Disallow: /r/
 
-# Blockiere KI-Training-Crawler und Scraper
+# Block AI training crawlers and scrapers completely
 User-agent: GPTBot
 Disallow: /
 
@@ -36,6 +39,10 @@ Disallow: /
 User-agent: FacebookBot
 Disallow: /
 
-# Standardregel für alle anderen (inkl. weiterer Suchmaschinen)
+# Default rule for all others: allow, but block redirect paths
 User-agent: *
-Disallow:
+Allow: /
+Disallow: /r/
+
+# Sitemap
+Sitemap: https://aadd.li/sitemap.xml
