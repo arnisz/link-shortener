@@ -1,8 +1,10 @@
 /**
- * IP-based rate limiting using D1.
+ * Key-based rate limiting using D1.
  *
  * Window = current minute (truncated ISO: "2026-04-11T14:05")
- * Limit  = 10 requests per window per IP.
+ * Default limit = 10 requests per window per key.
+ * Key is typically an IP, but can be a composite like "login:1.2.3.4"
+ * or "redirect:1.2.3.4" to maintain separate counters per tier.
  * Old windows (> 5 minutes) are cleaned up on each check.
  */
 
@@ -17,8 +19,9 @@ function cutoffWindow(): string {
 }
 
 export async function checkRateLimit(
-	ip: string,
-	db: D1Database
+	key: string,
+	db: D1Database,
+	limit = 10
 ): Promise<{ allowed: boolean }> {
 	const window = currentWindow();
 	const cutoff = cutoffWindow();
@@ -34,20 +37,20 @@ export async function checkRateLimit(
 		.prepare(
 			"INSERT OR IGNORE INTO rate_limits (ip, window_start, count) VALUES (?, ?, 0)"
 		)
-		.bind(ip, window)
+		.bind(key, window)
 		.run();
 
 	await db
 		.prepare(
 			"UPDATE rate_limits SET count = count + 1 WHERE ip = ? AND window_start = ?"
 		)
-		.bind(ip, window)
+		.bind(key, window)
 		.run();
 
 	const row = await db
 		.prepare("SELECT count FROM rate_limits WHERE ip = ? AND window_start = ?")
-		.bind(ip, window)
+		.bind(key, window)
 		.first<{ count: number }>();
 
-	return { allowed: (row?.count ?? 0) <= 10 };
+	return { allowed: (row?.count ?? 0) <= limit };
 }

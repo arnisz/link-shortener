@@ -24,7 +24,7 @@ import {
 	vi,
 } from "vitest";
 import worker from "../src/index";
-import { makeRequest, buildFakeIdToken, setupTestDb, seedSession, setupLinksTable, seedLink } from "./helpers";
+import { makeRequest, buildFakeIdToken, setupTestDb, seedSession, setupLinksTable, seedLink, setupRateLimitTable } from "./helpers";
 
 const BASE = "https://example.com";
 
@@ -33,6 +33,7 @@ const BASE = "https://example.com";
 beforeAll(async () => {
 	await setupTestDb(env.hello_cf_spa_db);
 	await setupLinksTable(env.hello_cf_spa_db);
+	await setupRateLimitTable(env.hello_cf_spa_db);
 });
 
 // ── Clean DB state before every test ─────────────────────────────────────────
@@ -41,6 +42,7 @@ beforeEach(async () => {
 	await env.hello_cf_spa_db.prepare("DELETE FROM links").run();
 	await env.hello_cf_spa_db.prepare("DELETE FROM sessions").run();
 	await env.hello_cf_spa_db.prepare("DELETE FROM users").run();
+	await env.hello_cf_spa_db.prepare("DELETE FROM rate_limits").run();
 	await env.hello_cf_spa_db
 		.prepare("UPDATE counters SET value = 0 WHERE name = 'hello'")
 		.run();
@@ -1629,6 +1631,177 @@ describe("GET /api/links – cursor-based pagination", () => {
 		for (const l of allLinks) {
 			expect(l.short_code.startsWith("pag-mine-")).toBe(true);
 		}
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CSRF protection (P0)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("CSRF protection on POST routes", () => {
+	it("returns 403 when Origin header is a foreign site", async () => {
+		const { sessionId } = await seedSession(env.hello_cf_spa_db);
+		const res = await call(
+			makeRequest(`${BASE}/api/links`, "POST", {
+				cookies: { sid: sessionId },
+				headers: {
+					"content-type": "application/json",
+					"Origin": "https://evil.com",
+					"X-Requested-With": "XMLHttpRequest",
+				},
+				body: JSON.stringify({ target_url: "https://example.com" }),
+			})
+		);
+		expect(res.status).toBe(403);
+	});
+
+	it("returns 403 when Origin matches APP_BASE_URL but X-Requested-With is missing", async () => {
+		const { sessionId } = await seedSession(env.hello_cf_spa_db);
+		const res = await call(
+			makeRequest(`${BASE}/api/links`, "POST", {
+				cookies: { sid: sessionId },
+				headers: {
+					"content-type": "application/json",
+					"Origin": "https://aadd.li", // matches APP_BASE_URL from wrangler.jsonc
+					// X-Requested-With intentionally absent
+				},
+				body: JSON.stringify({ target_url: "https://example.com" }),
+			})
+		);
+		expect(res.status).toBe(403);
+	});
+
+	it("allows POST when Origin matches APP_BASE_URL and X-Requested-With is set", async () => {
+		const { sessionId } = await seedSession(env.hello_cf_spa_db);
+		const res = await call(
+			makeRequest(`${BASE}/api/links`, "POST", {
+				cookies: { sid: sessionId },
+				headers: {
+					"content-type": "application/json",
+					"Origin": "https://aadd.li",
+					"X-Requested-With": "XMLHttpRequest",
+				},
+				body: JSON.stringify({ target_url: "https://csrf-allowed.example.com" }),
+			})
+		);
+		expect(res.status).toBe(201);
+	});
+
+	it("allows POST without Origin header (non-browser client / curl / tests)", async () => {
+		const { sessionId } = await seedSession(env.hello_cf_spa_db);
+		const res = await call(
+			makeRequest(`${BASE}/api/links`, "POST", {
+				cookies: { sid: sessionId },
+				headers: {
+					"content-type": "application/json",
+					// No Origin header — existing tests and curl behave this way
+				},
+				body: JSON.stringify({ target_url: "https://no-origin.example.com" }),
+			})
+		);
+		expect(res.status).toBe(201);
+	});
+
+	it("returns 403 on anonymous link creation with foreign Origin", async () => {
+		const res = await call(
+			makeRequest(`${BASE}/api/links/anonymous`, "POST", {
+				headers: {
+					"content-type": "application/json",
+					"Origin": "https://attacker.example.com",
+					"X-Requested-With": "XMLHttpRequest",
+					"CF-Connecting-IP": "1.1.1.1",
+				},
+				body: JSON.stringify({ target_url: "https://example.com" }),
+			})
+		);
+		expect(res.status).toBe(403);
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Rate limiting – GET /login  (P0)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("Rate limit on GET /login", () => {
+	it("returns 429 when the login rate limit is exceeded", async () => {
+		const ip = "55.66.77.88";
+		const window = new Date().toISOString().slice(0, 16);
+		// Pre-seed 5 counts (limit is 5) so the next call is the 6th and gets blocked.
+		await env.hello_cf_spa_db
+			.prepare("INSERT OR REPLACE INTO rate_limits (ip, window_start, count) VALUES (?, ?, 5)")
+			.bind(`login:${ip}`, window)
+			.run();
+
+		const res = await call(
+			makeRequest(`${BASE}/login`, "GET", {
+				headers: { "CF-Connecting-IP": ip },
+			})
+		);
+		expect(res.status).toBe(429);
+	});
+
+	it("allows login when rate limit not yet exceeded", async () => {
+		// Fresh IP → should get 302 redirect to Google
+		const res = await call(
+			makeRequest(`${BASE}/login`, "GET", {
+				headers: { "CF-Connecting-IP": "99.88.77.66" },
+			})
+		);
+		expect(res.status).toBe(302);
+		expect(res.headers.get("location")).toContain("accounts.google.com");
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Rate limiting – GET /r/:code  (P0)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("Rate limit on GET /r/:code", () => {
+	it("returns 429 when the redirect rate limit is exceeded", async () => {
+		const { userId } = await seedSession(env.hello_cf_spa_db);
+		await seedLink(env.hello_cf_spa_db, {
+			userId,
+			shortCode: "rl-redir-test",
+			targetUrl: "https://destination.example.com",
+		});
+		const ip = "11.22.33.44";
+		const window = new Date().toISOString().slice(0, 16);
+		// Pre-seed 60 counts (limit is 60) so the next call is the 61st and gets blocked.
+		await env.hello_cf_spa_db
+			.prepare("INSERT OR REPLACE INTO rate_limits (ip, window_start, count) VALUES (?, ?, 60)")
+			.bind(`redirect:${ip}`, window)
+			.run();
+
+		const res = await call(
+			makeRequest(`${BASE}/r/rl-redir-test`, "GET", {
+				headers: { "CF-Connecting-IP": ip },
+			})
+		);
+		expect(res.status).toBe(429);
+	});
+
+	it("redirect rate limit is independent of anonymous link rate limit", async () => {
+		const { userId } = await seedSession(env.hello_cf_spa_db);
+		await seedLink(env.hello_cf_spa_db, {
+			userId,
+			shortCode: "rl-indep-test",
+			targetUrl: "https://independent.example.com",
+		});
+		const ip = "22.33.44.55";
+		const window = new Date().toISOString().slice(0, 16);
+		// Exhaust anonymous limit (10) — redirect limit (60) must remain unaffected.
+		await env.hello_cf_spa_db
+			.prepare("INSERT OR REPLACE INTO rate_limits (ip, window_start, count) VALUES (?, ?, 10)")
+			.bind(ip, window)
+			.run();
+
+		// Redirect should still work (uses "redirect:ip" key, not plain "ip")
+		const res = await call(
+			makeRequest(`${BASE}/r/rl-indep-test`, "GET", {
+				headers: { "CF-Connecting-IP": ip },
+			})
+		);
+		expect(res.status).toBe(302);
 	});
 });
 

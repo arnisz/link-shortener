@@ -391,7 +391,14 @@ export async function handleCreateAnonymousLink(request: Request, env: Env): Pro
 }
 
 /** GET /r/:code – redirects to the target URL; increments click count asynchronously. */
-export async function handleRedirect(code: string, env: Env, ctx: ExecutionContext): Promise<Response> {
+export async function handleRedirect(code: string, env: Env, ctx: ExecutionContext, request: Request): Promise<Response> {
+	// Rate-limit redirect lookups to prevent short-code enumeration (60/min per IP).
+	const ip = request.headers.get("CF-Connecting-IP") ?? "127.0.0.1";
+	const { allowed } = await checkRateLimit(`redirect:${ip}`, env.hello_cf_spa_db, 60);
+	if (!allowed) {
+		return errResponse("Too many requests", 429);
+	}
+
 	const link = await env.hello_cf_spa_db
 		.prepare("SELECT id, target_url, is_active, expires_at FROM links WHERE short_code = ?")
 		.bind(code)

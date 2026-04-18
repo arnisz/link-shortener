@@ -2,11 +2,17 @@ import type { Env } from "./types";
 import { handleGetMe, handleLogout, handleLogin, handleGoogleCallback } from "./handlers/auth";
 import { handleCreateLink, handleGetLinks, handleUpdateLink, handleDeleteLink, handleRedirect, handleCreateAnonymousLink } from "./handlers/links";
 import { handleHello } from "./handlers/hello";
-import { applySecurityHeaders } from "./utils";
+import { applySecurityHeaders, errResponse } from "./utils";
+import { validateCsrf } from "./csrf";
 
 async function router(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 	const url = new URL(request.url);
 	const { pathname, method } = { pathname: url.pathname, method: request.method };
+
+	// ── CSRF protection: reject cross-origin POST requests ────────────────────
+	if (!validateCsrf(request, env)) {
+		return errResponse("CSRF validation failed", 403);
+	}
 
 	if (pathname === "/login" && method === "GET")                         return handleLogin(request, env);
 	if (pathname === "/api/auth/google/callback" && method === "GET")      return handleGoogleCallback(request, env);
@@ -24,7 +30,7 @@ async function router(request: Request, env: Env, ctx: ExecutionContext): Promis
 	if (deleteMatch && method === "POST") return handleDeleteLink(deleteMatch[1], request, env);
 
 	const redirectMatch = pathname.match(/^\/r\/([a-zA-Z0-9_-]+)$/);
-	if (redirectMatch && method === "GET") return handleRedirect(redirectMatch[1], env, ctx);
+	if (redirectMatch && method === "GET") return handleRedirect(redirectMatch[1], env, ctx, request);
 
 	return new Response("Not found", { status: 404 });
 }

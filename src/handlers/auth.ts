@@ -3,6 +3,8 @@ import { SESSION_COOKIE_MAX_AGE_SECONDS, OAUTH_COOKIE_MAX_AGE_SECONDS } from "..
 import { getCookie, makeSessionCookie, clearSessionCookie, jsonResponse, log } from "../utils";
 import { parseGoogleIdToken } from "../auth/google";
 import { upsertUserFromGoogle, createSession, getSessionUser } from "../auth/session";
+import { checkRateLimit } from "../rateLimit";
+import { errResponse } from "../utils";
 
 /** GET /api/me – returns the current user or { authenticated: false }. */
 export async function handleGetMe(request: Request, env: Env): Promise<Response> {
@@ -34,6 +36,13 @@ export async function handleLogout(request: Request, env: Env): Promise<Response
 
 /** GET /login – initiates Google OAuth flow. */
 export async function handleLogin(request: Request, env: Env): Promise<Response> {
+	// Rate-limit login initiation to prevent bot floods (5/min per IP).
+	const ip = request.headers.get("CF-Connecting-IP") ?? "127.0.0.1";
+	const { allowed } = await checkRateLimit(`login:${ip}`, env.hello_cf_spa_db, 5);
+	if (!allowed) {
+		return errResponse("Too many requests", 429);
+	}
+
 	// Generate CSRF state + replay-prevention nonce
 	const arr = new Uint8Array(16);
 	crypto.getRandomValues(arr);

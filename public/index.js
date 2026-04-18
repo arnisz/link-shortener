@@ -80,7 +80,10 @@ form.addEventListener("submit", async (e) => {
 	try {
 		const resp = await fetch("/api/links/anonymous", {
 			method: "POST",
-			headers: { "content-type": "application/json" },
+			headers: {
+				"content-type": "application/json",
+				"X-Requested-With": "XMLHttpRequest",
+			},
 			body: JSON.stringify({ target_url: urlInput.value.trim() }),
 		});
 		const data = await resp.json().catch(() => ({}));
@@ -134,7 +137,10 @@ locationBtn.addEventListener("click", () => {
 			try {
 				const res = await fetch("/api/links/anonymous", {
 					method: "POST",
-					headers: { "Content-Type": "application/json" },
+					headers: {
+						"Content-Type": "application/json",
+						"X-Requested-With": "XMLHttpRequest",
+					},
 					body: JSON.stringify({ target_url: mapsUrl }),
 				});
 				const data = await res.json();

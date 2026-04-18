@@ -295,7 +295,10 @@ function renderLinkCard(l) {
 		try {
 			const res = await fetch(`/api/links/${l.id}/update`, {
 				method: "POST",
-				headers: { "Content-Type": "application/json" },
+				headers: {
+					"Content-Type": "application/json",
+					"X-Requested-With": "XMLHttpRequest",
+				},
 				body: JSON.stringify({ title: newTitle, alias: newAlias }),
 			});
 			const data = await res.json().catch(() => ({}));
@@ -416,7 +419,10 @@ function clearCardError(card) {
 async function toggleLink(id, currentIsActive) {
 	const resp = await fetch(`/api/links/${id}/update`, {
 		method: "POST",
-		headers: { "content-type": "application/json" },
+		headers: {
+			"content-type": "application/json",
+			"X-Requested-With": "XMLHttpRequest",
+		},
 		body: JSON.stringify({ is_active: !currentIsActive }),
 	});
 	if (resp.ok) {
@@ -434,7 +440,10 @@ async function toggleLink(id, currentIsActive) {
 }
 
 async function deleteLink(id) {
-	const resp = await fetch(`/api/links/${id}/delete`, { method: "POST" });
+	const resp = await fetch(`/api/links/${id}/delete`, {
+		method: "POST",
+		headers: { "X-Requested-With": "XMLHttpRequest" },
+	});
 	if (resp.ok) {
 		await loadLinks();
 	} else if (resp.status === 401) {
@@ -522,7 +531,10 @@ document.getElementById("create-form").addEventListener("submit", async (e) => {
 	try {
 		const resp = await fetch("/api/links", {
 			method: "POST",
-			headers: { "content-type": "application/json" },
+			headers: {
+				"content-type": "application/json",
+				"X-Requested-With": "XMLHttpRequest",
+			},
 			body: JSON.stringify(body),
 		});
 		const data = await resp.json();
@@ -535,6 +547,19 @@ document.getElementById("create-form").addEventListener("submit", async (e) => {
 		await loadLinks();
 	} catch (err) {
 		setCreateStatus("error", err.message || String(err) || translate("error.app.create"));
+	}
+});
+
+// ── Logout ────────────────────────────────────────────────────────────────────
+
+document.getElementById("logout-btn").addEventListener("click", async () => {
+	try {
+		await fetch("/logout", {
+			method: "POST",
+			headers: { "X-Requested-With": "XMLHttpRequest" },
+		});
+	} finally {
+		window.location.href = "/";
 	}
 });
 
@@ -586,7 +611,10 @@ document.getElementById("location-btn-app").addEventListener("click", () => {
 			try {
 				const res = await fetch("/api/links", {
 					method: "POST",
-					headers: { "Content-Type": "application/json" },
+					headers: {
+						"Content-Type": "application/json",
+						"X-Requested-With": "XMLHttpRequest",
+					},
 					body: JSON.stringify({
 						target_url: mapsUrl,
 						title: `${translate("app.location.title_prefix")} ${now}`,
