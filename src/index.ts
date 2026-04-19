@@ -28,7 +28,10 @@ async function router(request: Request, env: Env, ctx: ExecutionContext): Promis
 	if (deleteMatch && method === "POST") return handleDeleteLink(deleteMatch[1], request, env);
 
 	const redirectMatch = pathname.match(/^\/r\/([a-zA-Z0-9_-]+)$/);
-	if (redirectMatch && method === "GET") return handleRedirect(redirectMatch[1], env, ctx, request);
+	if (redirectMatch && (method === "GET" || method === "HEAD"))
+	{
+		return handleRedirect(redirectMatch[1], env, ctx, request);
+	}
 
 	return new Response("Not found", { status: 404 });
 }
