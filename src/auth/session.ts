@@ -71,8 +71,8 @@ export async function createSession(
 }
 
 export async function getSessionUser(request: Request, env: Env) {
-	// 🔴 SICHERHEIT: Lese __Host-sid Cookie (neuer Name mit __Host--Präfix)
-	const sid = getCookie(request, "__Host-sid") ?? getCookie(request, "sid"); // Fallback für alte Sessions
+	// 🔴 SICHERHEIT: Nur __Host-sid lesen – kein Fallback auf unsicheres sid-Cookie (Session-Fixation-Schutz)
+	const sid = getCookie(request, "__Host-sid");
 	if (!sid) return null;
 
 	const now = new Date().toISOString();

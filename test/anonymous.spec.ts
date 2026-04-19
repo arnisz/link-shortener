@@ -99,6 +99,31 @@ describe("POST /api/links/anonymous", () => {
 		expect(res.status).toBe(400);
 	});
 
+	it("returns 400 for a localhost URL (SSRF protection)", async () => {
+		const res = await postAnonymous("http://localhost:8080/admin");
+		expect(res.status).toBe(400);
+	});
+
+	it("returns 400 for a private IP URL (SSRF protection)", async () => {
+		const res = await postAnonymous("http://192.168.1.1/router");
+		expect(res.status).toBe(400);
+	});
+
+	it("returns 400 for 127.0.0.1 (SSRF protection)", async () => {
+		const res = await postAnonymous("http://127.0.0.1/secret");
+		expect(res.status).toBe(400);
+	});
+
+	it("returns 400 for a 10.x.x.x private IP (SSRF protection)", async () => {
+		const res = await postAnonymous("http://10.0.0.1/internal");
+		expect(res.status).toBe(400);
+	});
+
+	it("returns 400 for AWS metadata endpoint (SSRF protection)", async () => {
+		const res = await postAnonymous("http://169.254.169.254/latest/meta-data/");
+		expect(res.status).toBe(400);
+	});
+
 	it("returns 400 when target_url is missing", async () => {
 		const ctx = createExecutionContext();
 		const res = await worker.fetch(

@@ -21,6 +21,15 @@ const authState = {
 
 let createStatusState = { type: "idle", message: "" };
 let isLocationBusy = false;
+let csrfToken = null;
+
+/** Returns mutation headers with CSRF token (if available) + legacy X-Requested-With. */
+function mutationHeaders(contentType) {
+	const h = { "X-Requested-With": "XMLHttpRequest" };
+	if (contentType) h["Content-Type"] = contentType;
+	if (csrfToken) h["X-CSRF-Token"] = csrfToken;
+	return h;
+}
 
 function copyToClipboard(text, btn) {
 	navigator.clipboard.writeText(text).then(() => {
@@ -209,13 +218,13 @@ function renderLinkCard(l) {
 	const toggleBtn = document.createElement("button");
 	toggleBtn.className = "btn-sm";
 	toggleBtn.textContent = l.is_active ? translate("app.link.btn.deactivate") : translate("app.link.btn.activate");
-	toggleBtn.addEventListener("click", () => toggleLink(l.id, !!l.is_active));
+	toggleBtn.addEventListener("click", () => toggleLink(l.short_code, !!l.is_active));
 	head.appendChild(toggleBtn);
 
 	const deleteBtn = document.createElement("button");
 	deleteBtn.className = "btn-sm";
 	deleteBtn.textContent = translate("app.link.btn.delete");
-	deleteBtn.addEventListener("click", () => deleteLink(l.id));
+	deleteBtn.addEventListener("click", () => deleteLink(l.short_code));
 	head.appendChild(deleteBtn);
 
 	row.appendChild(head);
@@ -293,12 +302,9 @@ function renderLinkCard(l) {
 		saveBtn.textContent = "…";
 
 		try {
-			const res = await fetch(`/api/links/${l.id}/update`, {
+			const res = await fetch(`/api/links/${l.short_code}/update`, {
 				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-					"X-Requested-With": "XMLHttpRequest",
-				},
+				headers: mutationHeaders("application/json"),
 				body: JSON.stringify({ title: newTitle, alias: newAlias }),
 			});
 			const data = await res.json().catch(() => ({}));
@@ -416,13 +422,10 @@ function clearCardError(card) {
 
 // ── Link actions ──────────────────────────────────────────────────────────────
 
-async function toggleLink(id, currentIsActive) {
-	const resp = await fetch(`/api/links/${id}/update`, {
+async function toggleLink(code, currentIsActive) {
+	const resp = await fetch(`/api/links/${code}/update`, {
 		method: "POST",
-		headers: {
-			"content-type": "application/json",
-			"X-Requested-With": "XMLHttpRequest",
-		},
+		headers: mutationHeaders("application/json"),
 		body: JSON.stringify({ is_active: !currentIsActive }),
 	});
 	if (resp.ok) {
@@ -439,10 +442,10 @@ async function toggleLink(id, currentIsActive) {
 	}
 }
 
-async function deleteLink(id) {
-	const resp = await fetch(`/api/links/${id}/delete`, {
+async function deleteLink(code) {
+	const resp = await fetch(`/api/links/${code}/delete`, {
 		method: "POST",
-		headers: { "X-Requested-With": "XMLHttpRequest" },
+		headers: mutationHeaders(),
 	});
 	if (resp.ok) {
 		await loadLinks();
@@ -531,10 +534,7 @@ document.getElementById("create-form").addEventListener("submit", async (e) => {
 	try {
 		const resp = await fetch("/api/links", {
 			method: "POST",
-			headers: {
-				"content-type": "application/json",
-				"X-Requested-With": "XMLHttpRequest",
-			},
+			headers: mutationHeaders("application/json"),
 			body: JSON.stringify(body),
 		});
 		const data = await resp.json();
@@ -556,7 +556,7 @@ document.getElementById("logout-btn").addEventListener("click", async () => {
 	try {
 		await fetch("/logout", {
 			method: "POST",
-			headers: { "X-Requested-With": "XMLHttpRequest" },
+			headers: mutationHeaders(),
 		});
 	} finally {
 		window.location.href = "/";
@@ -575,11 +575,13 @@ async function loadMe() {
 		const data = await resp.json();
 		if (!data.authenticated) {
 			authState.mode = "anonymous";
+			csrfToken = null;
 			renderAuthStatus();
 			return;
 		}
 		authState.mode = "authenticated";
 		authState.email = data.user.email;
+		csrfToken = data.csrfToken || null;
 		renderAuthStatus();
 		await loadLinks();
 	} catch (err) {
@@ -611,10 +613,7 @@ document.getElementById("location-btn-app").addEventListener("click", () => {
 			try {
 				const res = await fetch("/api/links", {
 					method: "POST",
-					headers: {
-						"Content-Type": "application/json",
-						"X-Requested-With": "XMLHttpRequest",
-					},
+					headers: mutationHeaders("application/json"),
 					body: JSON.stringify({
 						target_url: mapsUrl,
 						title: `${translate("app.location.title_prefix")} ${now}`,

@@ -69,7 +69,7 @@ describe("/api/me", () => {
 	it("returns authenticated:true with a valid session cookie", async () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
-			makeRequest(`${BASE}/api/me`, "GET", { cookies: { sid: sessionId } })
+			makeRequest(`${BASE}/api/me`, "GET", { cookies: { "__Host-sid": sessionId } })
 		);
 		expect(res.status).toBe(200);
 		const data = await res.json<{
@@ -82,7 +82,7 @@ describe("/api/me", () => {
 
 	it("returns authenticated:false when the session cookie is unknown", async () => {
 		const res = await call(
-			makeRequest(`${BASE}/api/me`, "GET", { cookies: { sid: "not-a-real-session" } })
+			makeRequest(`${BASE}/api/me`, "GET", { cookies: { "__Host-sid": "not-a-real-session" } })
 		);
 		const data = await res.json<{ authenticated: boolean }>();
 		expect(data.authenticated).toBe(false);
@@ -103,7 +103,7 @@ describe("POST /logout", () => {
 	it("clears the session cookie (Max-Age=0)", async () => {
 		const res = await call(makeRequest(`${BASE}/logout`, "POST"));
 		const cookie = res.headers.get("set-cookie") ?? "";
-		expect(cookie).toContain("sid=");
+		expect(cookie).toMatch(/(__Host-sid=|sid=)/);
 		expect(cookie).toContain("Max-Age=0");
 	});
 
@@ -111,7 +111,7 @@ describe("POST /logout", () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 
 		await call(
-			makeRequest(`${BASE}/logout`, "POST", { cookies: { sid: sessionId } })
+			makeRequest(`${BASE}/logout`, "POST", { cookies: { "__Host-sid": sessionId } })
 		);
 
 		const row = await env.hello_cf_spa_db
@@ -466,7 +466,7 @@ describe("POST /api/links", () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ target_url: "https://example.com/page", title: "Test-Link" }),
 			})
@@ -490,7 +490,7 @@ describe("POST /api/links", () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ target_url: "not-a-url" }),
 			})
@@ -502,7 +502,7 @@ describe("POST /api/links", () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ title: "No URL here" }),
 			})
@@ -514,7 +514,7 @@ describe("POST /api/links", () => {
 		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
 		await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ target_url: "https://persisted.example.com" }),
 			})
@@ -541,7 +541,7 @@ describe("GET /api/links", () => {
 	it("returns an empty links array when the user has no links", async () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
-			makeRequest(`${BASE}/api/links`, "GET", { cookies: { sid: sessionId } })
+			makeRequest(`${BASE}/api/links`, "GET", { cookies: { "__Host-sid": sessionId } })
 		);
 		expect(res.status).toBe(200);
 		const data = await res.json<{ links: unknown[]; nextCursor: string | null }>();
@@ -561,7 +561,7 @@ describe("GET /api/links", () => {
 		await seedLink(env.hello_cf_spa_db, { userId: other.userId, shortCode: "theirs01" });
 
 		const res = await call(
-			makeRequest(`${BASE}/api/links`, "GET", { cookies: { sid: sessionId } })
+			makeRequest(`${BASE}/api/links`, "GET", { cookies: { "__Host-sid": sessionId } })
 		);
 		expect(res.status).toBe(200);
 		const data = await res.json<{ links: { short_code: string }[]; nextCursor: string | null }>();
@@ -574,7 +574,7 @@ describe("GET /api/links", () => {
 		await seedLink(env.hello_cf_spa_db, { userId, shortCode: "urltest1" });
 
 		const res = await call(
-			makeRequest(`${BASE}/api/links`, "GET", { cookies: { sid: sessionId } })
+			makeRequest(`${BASE}/api/links`, "GET", { cookies: { "__Host-sid": sessionId } })
 		);
 		const data = await res.json<{ links: { short_url: string }[] }>();
 		expect(data.links[0].short_url).toContain("/r/urltest1");
@@ -606,7 +606,7 @@ describe("GET /r/:code", () => {
 
 	it("increments click_count after a redirect", async () => {
 		const { userId } = await seedSession(env.hello_cf_spa_db);
-		const { id } = await seedLink(env.hello_cf_spa_db, {
+		const { id, shortCode } = await seedLink(env.hello_cf_spa_db, {
 			userId,
 			shortCode: "clickme1",
 		});
@@ -622,7 +622,7 @@ describe("GET /r/:code", () => {
 
 	it("click_count accumulates across multiple redirects", async () => {
 		const { userId } = await seedSession(env.hello_cf_spa_db);
-		const { id } = await seedLink(env.hello_cf_spa_db, {
+		const { id, shortCode } = await seedLink(env.hello_cf_spa_db, {
 			userId,
 			shortCode: "clickme2",
 		});
@@ -658,7 +658,7 @@ describe("GET /r/:code", () => {
 
 	it("does not increment click_count for an inactive link", async () => {
 		const { userId } = await seedSession(env.hello_cf_spa_db);
-		const { id } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "inact-cnt", isActive: 0 });
+		const { id, shortCode } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "inact-cnt", isActive: 0 });
 		await call(makeRequest(`${BASE}/r/inact-cnt`));
 		const row = await env.hello_cf_spa_db
 			.prepare("SELECT click_count FROM links WHERE id = ?")
@@ -691,7 +691,7 @@ describe("POST /api/links – Phase 2", () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ target_url: "https://example.com", alias: "my-alias" }),
 			})
@@ -708,7 +708,7 @@ describe("POST /api/links – Phase 2", () => {
 		await seedLink(env.hello_cf_spa_db, { userId, shortCode: "taken-alias" });
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ target_url: "https://example.com", alias: "taken-alias" }),
 			})
@@ -720,7 +720,7 @@ describe("POST /api/links – Phase 2", () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ target_url: "https://example.com", alias: "BadAlias" }),
 			})
@@ -734,7 +734,7 @@ describe("POST /api/links – Phase 2", () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ target_url: "https://example.com", alias: "api" }),
 			})
@@ -746,7 +746,7 @@ describe("POST /api/links – Phase 2", () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ target_url: "https://example.com", alias: "ab" }),
 			})
@@ -759,7 +759,7 @@ describe("POST /api/links – Phase 2", () => {
 		const past = new Date(Date.now() - 1000).toISOString();
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ target_url: "https://example.com", expires_at: past }),
 			})
@@ -771,7 +771,7 @@ describe("POST /api/links – Phase 2", () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ target_url: "https://example.com", expires_at: "not-a-date" }),
 			})
@@ -784,7 +784,7 @@ describe("POST /api/links – Phase 2", () => {
 		const future = new Date(Date.now() + 1000 * 60 * 60).toISOString();
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ target_url: "https://example.com", expires_at: future }),
 			})
@@ -801,7 +801,7 @@ describe("POST /api/links – Phase 2", () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ target_url: "https://example.com", alias: "valid-alias" }),
 			})
@@ -816,7 +816,7 @@ describe("POST /api/links – Phase 2", () => {
 		// U+2013 EN DASH should be converted to ASCII hyphen → "my-link"
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ target_url: "https://example.com", alias: "my\u2013link" }),
 			})
@@ -830,7 +830,7 @@ describe("POST /api/links – Phase 2", () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ target_url: "https://example.com", alias: "" }),
 			})
@@ -845,7 +845,7 @@ describe("POST /api/links – Phase 2", () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ target_url: "https://example.com", alias: 42 }),
 			})
@@ -864,7 +864,7 @@ describe("GET /api/links – Phase 2", () => {
 		await seedLink(env.hello_cf_spa_db, { userId, shortCode: "fields-test" });
 
 		const res = await call(
-			makeRequest(`${BASE}/api/links`, "GET", { cookies: { sid: sessionId } })
+			makeRequest(`${BASE}/api/links`, "GET", { cookies: { "__Host-sid": sessionId } })
 		);
 		const data = await res.json<{ links: { expires_at: unknown; is_active: unknown }[] }>();
 		expect("expires_at" in data.links[0]).toBe(true);
@@ -896,11 +896,11 @@ describe("POST /api/links/:id/update", () => {
 			email: "other-u01@example.com",
 			googleSub: "google-sub-u01",
 		});
-		const { id } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "upd-owner" });
+		const { id, shortCode } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "upd-owner" });
 
 		const res = await call(
-			makeRequest(`${BASE}/api/links/${id}/update`, "POST", {
-				cookies: { sid: otherSession },
+			makeRequest(`${BASE}/api/links/${shortCode}/update`, "POST", {
+				cookies: { "__Host-sid": otherSession },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ title: "Stolen" }),
 			})
@@ -910,11 +910,11 @@ describe("POST /api/links/:id/update", () => {
 
 	it("returns 400 when the body has nothing to update", async () => {
 		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
-		const { id } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "upd-empty" });
+		const { id, shortCode } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "upd-empty" });
 
 		const res = await call(
-			makeRequest(`${BASE}/api/links/${id}/update`, "POST", {
-				cookies: { sid: sessionId },
+			makeRequest(`${BASE}/api/links/${shortCode}/update`, "POST", {
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({}),
 			})
@@ -924,11 +924,11 @@ describe("POST /api/links/:id/update", () => {
 
 	it("updates the title", async () => {
 		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
-		const { id } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "upd-title" });
+		const { id, shortCode } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "upd-title" });
 
 		const res = await call(
-			makeRequest(`${BASE}/api/links/${id}/update`, "POST", {
-				cookies: { sid: sessionId },
+			makeRequest(`${BASE}/api/links/${shortCode}/update`, "POST", {
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ title: "New Title" }),
 			})
@@ -940,11 +940,11 @@ describe("POST /api/links/:id/update", () => {
 
 	it("deactivates a link (is_active: false)", async () => {
 		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
-		const { id } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "upd-deact" });
+		const { id, shortCode } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "upd-deact" });
 
 		const res = await call(
-			makeRequest(`${BASE}/api/links/${id}/update`, "POST", {
-				cookies: { sid: sessionId },
+			makeRequest(`${BASE}/api/links/${shortCode}/update`, "POST", {
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ is_active: false }),
 			})
@@ -956,11 +956,11 @@ describe("POST /api/links/:id/update", () => {
 
 	it("re-activates a previously inactive link", async () => {
 		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
-		const { id } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "upd-react", isActive: 0 });
+		const { id, shortCode } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "upd-react", isActive: 0 });
 
 		const res = await call(
-			makeRequest(`${BASE}/api/links/${id}/update`, "POST", {
-				cookies: { sid: sessionId },
+			makeRequest(`${BASE}/api/links/${shortCode}/update`, "POST", {
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ is_active: true }),
 			})
@@ -972,12 +972,12 @@ describe("POST /api/links/:id/update", () => {
 
 	it("sets expires_at to a future date", async () => {
 		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
-		const { id } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "upd-exp" });
+		const { id, shortCode } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "upd-exp" });
 		const future = new Date(Date.now() + 1000 * 60 * 60 * 48).toISOString();
 
 		const res = await call(
-			makeRequest(`${BASE}/api/links/${id}/update`, "POST", {
-				cookies: { sid: sessionId },
+			makeRequest(`${BASE}/api/links/${shortCode}/update`, "POST", {
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ expires_at: future }),
 			})
@@ -990,11 +990,11 @@ describe("POST /api/links/:id/update", () => {
 	it("clears expires_at when set to null", async () => {
 		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
 		const past = new Date(Date.now() + 1000 * 60 * 60).toISOString();
-		const { id } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "upd-clrexp", expiresAt: past });
+		const { id, shortCode } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "upd-clrexp", expiresAt: past });
 
 		const res = await call(
-			makeRequest(`${BASE}/api/links/${id}/update`, "POST", {
-				cookies: { sid: sessionId },
+			makeRequest(`${BASE}/api/links/${shortCode}/update`, "POST", {
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ expires_at: null }),
 			})
@@ -1006,11 +1006,11 @@ describe("POST /api/links/:id/update", () => {
 
 	it("returns 400 for an invalid expires_at in update", async () => {
 		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
-		const { id } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "upd-badexp" });
+		const { id, shortCode } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "upd-badexp" });
 
 		const res = await call(
-			makeRequest(`${BASE}/api/links/${id}/update`, "POST", {
-				cookies: { sid: sessionId },
+			makeRequest(`${BASE}/api/links/${shortCode}/update`, "POST", {
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ expires_at: "gestern" }),
 			})
@@ -1023,8 +1023,8 @@ describe("POST /api/links/:id/update", () => {
 		const { id, shortCode } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "upd-unreach" });
 
 		await call(
-			makeRequest(`${BASE}/api/links/${id}/update`, "POST", {
-				cookies: { sid: sessionId },
+			makeRequest(`${BASE}/api/links/${shortCode}/update`, "POST", {
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ is_active: false }),
 			})
@@ -1043,7 +1043,7 @@ describe("Content-Type enforcement", () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				// deliberately no content-type header
 				body: JSON.stringify({ target_url: "https://example.com" }),
 			})
@@ -1053,10 +1053,10 @@ describe("Content-Type enforcement", () => {
 
 	it("returns 415 for POST /api/links/:id/update without application/json content-type", async () => {
 		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
-		const { id } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "ct-upd-test" });
+		const { id, shortCode } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "ct-upd-test" });
 		const res = await call(
-			makeRequest(`${BASE}/api/links/${id}/update`, "POST", {
-				cookies: { sid: sessionId },
+			makeRequest(`${BASE}/api/links/${shortCode}/update`, "POST", {
+				cookies: { "__Host-sid": sessionId },
 				// deliberately no content-type header
 				body: JSON.stringify({ title: "test" }),
 			})
@@ -1076,7 +1076,7 @@ describe("Input length limits on POST /api/links", () => {
 		const longUrl = "https://example.com/" + "a".repeat(1990);
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ target_url: longUrl }),
 			})
@@ -1088,7 +1088,7 @@ describe("Input length limits on POST /api/links", () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({
 					target_url: "https://example.com",
@@ -1101,10 +1101,10 @@ describe("Input length limits on POST /api/links", () => {
 
 	it("returns 400 when title exceeds 200 characters in update", async () => {
 		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
-		const { id } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "title-len-upd" });
+		const { id, shortCode } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "title-len-upd" });
 		const res = await call(
-			makeRequest(`${BASE}/api/links/${id}/update`, "POST", {
-				cookies: { sid: sessionId },
+			makeRequest(`${BASE}/api/links/${shortCode}/update`, "POST", {
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ title: "x".repeat(201) }),
 			})
@@ -1127,7 +1127,7 @@ describe("Alias validation regression – POST /api/links", () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ target_url: "https://example.com", alias: "google3" }),
 			})
@@ -1141,7 +1141,7 @@ describe("Alias validation regression – POST /api/links", () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ target_url: "https://example.com", alias: "mein-link" }),
 			})
@@ -1155,7 +1155,7 @@ describe("Alias validation regression – POST /api/links", () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ target_url: "https://example.com", alias: "mein_link" }),
 			})
@@ -1171,7 +1171,7 @@ describe("Alias validation regression – POST /api/links", () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ target_url: "https://example.com", alias: "Google3" }),
 			})
@@ -1185,7 +1185,7 @@ describe("Alias validation regression – POST /api/links", () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ target_url: "https://example.com", alias: "ab" }),
 			})
@@ -1199,7 +1199,7 @@ describe("Alias validation regression – POST /api/links", () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ target_url: "https://example.com", alias: "test link" }),
 			})
@@ -1258,11 +1258,11 @@ describe("POST /api/links/:id/delete", () => {
 			email: "other-del01@example.com",
 			googleSub: "google-sub-del01",
 		});
-		const { id } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "del-owner" });
+		const { id, shortCode } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "del-owner" });
 
 		const res = await call(
-			makeRequest(`${BASE}/api/links/${id}/delete`, "POST", {
-				cookies: { sid: otherSession },
+			makeRequest(`${BASE}/api/links/${shortCode}/delete`, "POST", {
+				cookies: { "__Host-sid": otherSession },
 			})
 		);
 		expect(res.status).toBe(404);
@@ -1270,11 +1270,11 @@ describe("POST /api/links/:id/delete", () => {
 
 	it("deletes the link and returns { ok: true }", async () => {
 		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
-		const { id } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "del-ok" });
+		const { id, shortCode } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "del-ok" });
 
 		const res = await call(
-			makeRequest(`${BASE}/api/links/${id}/delete`, "POST", {
-				cookies: { sid: sessionId },
+			makeRequest(`${BASE}/api/links/${shortCode}/delete`, "POST", {
+				cookies: { "__Host-sid": sessionId },
 			})
 		);
 		expect(res.status).toBe(200);
@@ -1284,11 +1284,11 @@ describe("POST /api/links/:id/delete", () => {
 
 	it("deleted link is removed from the database", async () => {
 		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
-		const { id } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "del-db" });
+		const { id, shortCode } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "del-db" });
 
 		await call(
-			makeRequest(`${BASE}/api/links/${id}/delete`, "POST", {
-				cookies: { sid: sessionId },
+			makeRequest(`${BASE}/api/links/${shortCode}/delete`, "POST", {
+				cookies: { "__Host-sid": sessionId },
 			})
 		);
 
@@ -1301,16 +1301,16 @@ describe("POST /api/links/:id/delete", () => {
 
 	it("deleted link no longer appears in GET /api/links", async () => {
 		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
-		const { id } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "del-list" });
+		const { id, shortCode } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "del-list" });
 
 		await call(
-			makeRequest(`${BASE}/api/links/${id}/delete`, "POST", {
-				cookies: { sid: sessionId },
+			makeRequest(`${BASE}/api/links/${shortCode}/delete`, "POST", {
+				cookies: { "__Host-sid": sessionId },
 			})
 		);
 
 		const listRes = await call(
-			makeRequest(`${BASE}/api/links`, "GET", { cookies: { sid: sessionId } })
+			makeRequest(`${BASE}/api/links`, "GET", { cookies: { "__Host-sid": sessionId } })
 		);
 		const data = await listRes.json<{ links: { id: string }[] }>();
 		expect(data.links.find(l => l.id === id)).toBeUndefined();
@@ -1318,10 +1318,10 @@ describe("POST /api/links/:id/delete", () => {
 
 	it("returns 404 when trying to delete an already-deleted link", async () => {
 		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
-		const { id } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "del-twice" });
+		const { id, shortCode } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "del-twice" });
 
-		await call(makeRequest(`${BASE}/api/links/${id}/delete`, "POST", { cookies: { sid: sessionId } }));
-		const second = await call(makeRequest(`${BASE}/api/links/${id}/delete`, "POST", { cookies: { sid: sessionId } }));
+		await call(makeRequest(`${BASE}/api/links/${shortCode}/delete`, "POST", { cookies: { "__Host-sid": sessionId } }));
+		const second = await call(makeRequest(`${BASE}/api/links/${shortCode}/delete`, "POST", { cookies: { "__Host-sid": sessionId } }));
 		expect(second.status).toBe(404);
 	});
 
@@ -1333,7 +1333,7 @@ describe("POST /api/links/:id/delete", () => {
 			targetUrl: "https://will-be-gone.example.com",
 		});
 
-		await call(makeRequest(`${BASE}/api/links/${id}/delete`, "POST", { cookies: { sid: sessionId } }));
+		await call(makeRequest(`${BASE}/api/links/${shortCode}/delete`, "POST", { cookies: { "__Host-sid": sessionId } }));
 		const res = await call(makeRequest(`${BASE}/r/${shortCode}`));
 		expect(res.status).toBe(404);
 	});
@@ -1348,7 +1348,7 @@ describe("POST /api/links – additional edge cases", () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ target_url: "ftp://files.example.com/file.txt" }),
 			})
@@ -1360,7 +1360,7 @@ describe("POST /api/links – additional edge cases", () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: "{not valid json",
 			})
@@ -1376,12 +1376,12 @@ describe("POST /api/links – additional edge cases", () => {
 describe("POST /api/links/:id/update – additional edge cases", () => {
 	it("returns 400 for a syntactically valid but past ISO date as expires_at", async () => {
 		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
-		const { id } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "upd-pastiso" });
+		const { id, shortCode } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "upd-pastiso" });
 		const past = new Date(Date.now() - 1000 * 60).toISOString(); // 1 minute ago
 
 		const res = await call(
-			makeRequest(`${BASE}/api/links/${id}/update`, "POST", {
-				cookies: { sid: sessionId },
+			makeRequest(`${BASE}/api/links/${shortCode}/update`, "POST", {
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ expires_at: past }),
 			})
@@ -1391,11 +1391,11 @@ describe("POST /api/links/:id/update – additional edge cases", () => {
 
 	it("returns 400 for an invalid is_active value (non-boolean string)", async () => {
 		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
-		const { id } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "upd-badact" });
+		const { id, shortCode } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "upd-badact" });
 
 		const res = await call(
-			makeRequest(`${BASE}/api/links/${id}/update`, "POST", {
-				cookies: { sid: sessionId },
+			makeRequest(`${BASE}/api/links/${shortCode}/update`, "POST", {
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ is_active: "yes" }),
 			})
@@ -1405,11 +1405,11 @@ describe("POST /api/links/:id/update – additional edge cases", () => {
 
 	it("can update title and is_active together in one request", async () => {
 		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
-		const { id } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "upd-multi" });
+		const { id, shortCode } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "upd-multi" });
 
 		const res = await call(
-			makeRequest(`${BASE}/api/links/${id}/update`, "POST", {
-				cookies: { sid: sessionId },
+			makeRequest(`${BASE}/api/links/${shortCode}/update`, "POST", {
+				cookies: { "__Host-sid": sessionId },
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ title: "Multi-Update", is_active: false }),
 			})
@@ -1457,7 +1457,7 @@ describe("GET /api/links – result ordering", () => {
 		await seedLink(env.hello_cf_spa_db, { userId, shortCode: "order-new" });
 
 		const res = await call(
-			makeRequest(`${BASE}/api/links`, "GET", { cookies: { sid: sessionId } })
+			makeRequest(`${BASE}/api/links`, "GET", { cookies: { "__Host-sid": sessionId } })
 		);
 		expect(res.status).toBe(200);
 		const data = await res.json<{ links: { short_code: string }[] }>();
@@ -1479,7 +1479,7 @@ describe("GET /api/links – cursor-based pagination", () => {
 		await seedLink(env.hello_cf_spa_db, { userId, shortCode: "pag-single" });
 
 		const res = await call(
-			makeRequest(`${BASE}/api/links?limit=10`, "GET", { cookies: { sid: sessionId } })
+			makeRequest(`${BASE}/api/links?limit=10`, "GET", { cookies: { "__Host-sid": sessionId } })
 		);
 		expect(res.status).toBe(200);
 		const data = await res.json<LinkPage>();
@@ -1497,7 +1497,7 @@ describe("GET /api/links – cursor-based pagination", () => {
 		}
 
 		const res = await call(
-			makeRequest(`${BASE}/api/links?limit=2`, "GET", { cookies: { sid: sessionId } })
+			makeRequest(`${BASE}/api/links?limit=2`, "GET", { cookies: { "__Host-sid": sessionId } })
 		);
 		expect(res.status).toBe(200);
 		const data = await res.json<LinkPage>();
@@ -1516,7 +1516,7 @@ describe("GET /api/links – cursor-based pagination", () => {
 
 		// Page 1: 2 links
 		const res1 = await call(
-			makeRequest(`${BASE}/api/links?limit=2`, "GET", { cookies: { sid: sessionId } })
+			makeRequest(`${BASE}/api/links?limit=2`, "GET", { cookies: { "__Host-sid": sessionId } })
 		);
 		const page1 = await res1.json<LinkPage>();
 		expect(page1.links).toHaveLength(2);
@@ -1525,7 +1525,7 @@ describe("GET /api/links – cursor-based pagination", () => {
 		// Page 2: remaining links using cursor
 		const res2 = await call(
 			makeRequest(`${BASE}/api/links?limit=2&cursor=${encodeURIComponent(page1.nextCursor!)}`, "GET", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 			})
 		);
 		const page2 = await res2.json<LinkPage>();
@@ -1552,14 +1552,14 @@ describe("GET /api/links – cursor-based pagination", () => {
 		}
 
 		const res1 = await call(
-			makeRequest(`${BASE}/api/links?limit=2`, "GET", { cookies: { sid: sessionId } })
+			makeRequest(`${BASE}/api/links?limit=2`, "GET", { cookies: { "__Host-sid": sessionId } })
 		);
 		const page1 = await res1.json<LinkPage>();
 		expect(page1.nextCursor).not.toBeNull();
 
 		const res2 = await call(
 			makeRequest(`${BASE}/api/links?limit=2&cursor=${encodeURIComponent(page1.nextCursor!)}`, "GET", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 			})
 		);
 		const page2 = await res2.json<LinkPage>();
@@ -1588,7 +1588,7 @@ describe("GET /api/links – cursor-based pagination", () => {
 			const url = cursor
 				? `${BASE}/api/links?limit=2&cursor=${encodeURIComponent(cursor)}`
 				: `${BASE}/api/links?limit=2`;
-			const res = await call(makeRequest(url, "GET", { cookies: { sid: sessionId } }));
+			const res = await call(makeRequest(url, "GET", { cookies: { "__Host-sid": sessionId } }));
 			const page = await res.json<{ links: { short_code: string }[]; nextCursor: string | null }>();
 			allLinks.push(...page.links);
 			cursor = page.nextCursor;
@@ -1611,7 +1611,7 @@ describe("CSRF protection on POST routes", () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				headers: {
 					"content-type": "application/json",
 					"Origin": "https://evil.com",
@@ -1627,7 +1627,7 @@ describe("CSRF protection on POST routes", () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				headers: {
 					"content-type": "application/json",
 					"Origin": "https://aadd.li", // matches APP_BASE_URL from wrangler.jsonc
@@ -1643,7 +1643,7 @@ describe("CSRF protection on POST routes", () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				headers: {
 					"content-type": "application/json",
 					"Origin": "https://aadd.li",
@@ -1659,7 +1659,7 @@ describe("CSRF protection on POST routes", () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { sid: sessionId },
+				cookies: { "__Host-sid": sessionId },
 				headers: {
 					"content-type": "application/json",
 					// No Origin header — existing tests and curl behave this way
@@ -1772,4 +1772,6 @@ describe("Rate limit on GET /r/:code", () => {
 		expect(res.status).toBe(302);
 	});
 });
+
+
 

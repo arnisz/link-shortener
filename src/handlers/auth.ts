@@ -5,6 +5,7 @@ import { parseGoogleIdToken } from "../auth/google";
 import { upsertUserFromGoogle, createSession, getSessionUser } from "../auth/session";
 import { checkRateLimit } from "../rateLimit";
 import { errResponse } from "../utils";
+import { generateCsrfToken } from "../csrf";
 
 /** GET /api/me – returns the current user or { authenticated: false }. */
 export async function handleGetMe(request: Request, env: Env): Promise<Response> {
@@ -12,13 +13,17 @@ export async function handleGetMe(request: Request, env: Env): Promise<Response>
 	if (!user) {
 		return jsonResponse({ authenticated: false });
 	}
-	return jsonResponse({ authenticated: true, user });
+	// P1-Fix: CSRF-Token im Response-Body bereitstellen, damit Browser-Clients
+	// es in X-CSRF-Token Header mitschicken können (HttpOnly-Cookie ist für JS unlesbar)
+	const sid = getCookie(request, "__Host-sid");
+	const csrfToken = sid ? generateCsrfToken(sid, env.SESSION_SECRET) : null;
+	return jsonResponse({ authenticated: true, user, csrfToken });
 }
 
 /** POST /logout – clears session and redirects to /. */
 export async function handleLogout(request: Request, env: Env): Promise<Response> {
-	// 🔴 SICHERHEIT: Lese beide Cookie-Namen (Fallback für alte Sessions)
-	const sid = getCookie(request, "__Host-sid") ?? getCookie(request, "sid");
+	// 🔴 SICHERHEIT: Nur __Host-sid lesen – kein Fallback auf unsicheres sid-Cookie (Session-Fixation-Schutz)
+	const sid = getCookie(request, "__Host-sid");
 	if (sid) {
 		await env.hello_cf_spa_db
 			.prepare("DELETE FROM sessions WHERE id = ?")
@@ -85,7 +90,7 @@ function validateOAuthState(
 		log("AUTH", "State validation failed");
 		return {
 			success: false,
-			response: new Response("Invalid login state", { status: 400 })
+			response: errResponse("Invalid login state", 400)
 		};
 	}
 	return { success: true };
@@ -112,7 +117,7 @@ async function exchangeCodeForToken(
 	if (!tokenResp.ok) {
 		const tokenError = await tokenResp.text();
 		log("TOKEN", `Exchange failed: ${tokenError}`);
-		return { success: false, response: new Response("Authentication failed", { status: 502 }) };
+		return { success: false, response: errResponse("Authentication failed", 502) };
 	}
 
 	const tokenJson = await tokenResp.json<GoogleTokenResponse>();
@@ -120,7 +125,7 @@ async function exchangeCodeForToken(
 		log("TOKEN", "Missing id_token in response");
 		return {
 			success: false,
-			response: new Response("Missing id_token", { status: 502 })
+			response: errResponse("Missing id_token", 502)
 		};
 	}
 
@@ -137,14 +142,14 @@ async function processGoogleCallback(
 		payload = await parseGoogleIdToken(idToken);
 	} catch (e) {
 		log("JWT", `Verification failed: ${e instanceof Error ? e.message : String(e)}`);
-		return { success: false, response: new Response("Authentication failed", { status: 400 }) };
+		return { success: false, response: errResponse("Authentication failed", 400) };
 	}
 
 	if (payload.nonce !== cookieNonce) {
 		log("AUTH", "Nonce mismatch");
 		return {
 			success: false,
-			response: new Response("Invalid nonce", { status: 400 })
+			response: errResponse("Invalid nonce", 400)
 		};
 	}
 
@@ -152,7 +157,7 @@ async function processGoogleCallback(
 		log("AUTH", "Invalid token audience");
 		return {
 			success: false,
-			response: new Response("Invalid token audience", { status: 400 })
+			response: errResponse("Invalid token audience", 400)
 		};
 	}
 
@@ -160,7 +165,7 @@ async function processGoogleCallback(
 		log("TOKEN", "Token expired");
 		return {
 			success: false,
-			response: new Response("Expired token", { status: 400 })
+			response: errResponse("Expired token", 400)
 		};
 	}
 

@@ -51,18 +51,30 @@ export function validateTargetUrl(raw: string): { ok: true; url: URL } | { ok: f
 	}
 
 	// SSRF-Schutz: Blockiere Private/Internal IPs
-	const hostname = parsed.hostname.toLowerCase();
+	const rawHostname = parsed.hostname.toLowerCase();
+	// IPv6 in URLs kommt immer in Brackets: [::1], [::ffff:127.0.0.1]
+	// Für die Prüfung Brackets entfernen, um alle Patterns einheitlich zu matchen.
+	const hostname = rawHostname.startsWith('[') && rawHostname.endsWith(']')
+		? rawHostname.slice(1, -1)
+		: rawHostname;
 	if (
 		hostname === 'localhost' ||
 		hostname === '127.0.0.1' ||
 		hostname === '::1' ||
+		hostname === '0.0.0.0' ||
+		hostname === '::' ||
 		hostname.endsWith('.internal') ||
 		hostname.endsWith('.localhost') ||
 		/^10\.\d+\.\d+\.\d+$/.test(hostname) ||
 		/^192\.168\.\d+\.\d+$/.test(hostname) ||
 		/^172\.(1[6-9]|2\d|3[01])\.\d+\.\d+$/.test(hostname) ||
-		/^fc[0-9a-f]{2}:/i.test(hostname) || // IPv6 ULA
-		/^fe80:/i.test(hostname)  // IPv6 Link-Local
+		/^169\.254\.\d+\.\d+$/.test(hostname) ||    // Link-Local / AWS Metadata
+		/^fc[0-9a-f]{2}:/i.test(hostname) ||         // IPv6 ULA
+		/^fe80:/i.test(hostname) ||                   // IPv6 Link-Local
+		/^::ffff:/i.test(hostname) ||                 // IPv6-mapped IPv4
+		/^0x[0-9a-f]+$/i.test(hostname) ||            // Hex-IPs (0x7f000001)
+		/^\d+$/.test(hostname) ||                     // Dezimal-IPs (2130706433)
+		/^0\d+\./m.test(hostname)                     // Oktal-IPs (0177.0.0.1)
 	) {
 		return { ok: false, error: 'Private/internal URLs are not allowed' };
 	}

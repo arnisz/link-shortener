@@ -1,5 +1,6 @@
 import type { Env } from "./types";
-import { createHmac } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
+import { errResponse, getCookie } from "./utils";
 
 /**
  * 🔴 SICHERHEIT: CSRF-Schutz mit Double-Submit-Cookie Pattern.
@@ -37,11 +38,9 @@ export function validateCsrfToken(
 	// Timing-safe comparison: verhindert Timing Attacks
 	if (headerToken.length !== expectedToken.length) return false;
 
-	let diff = 0;
-	for (let i = 0; i < headerToken.length; i++) {
-		diff |= headerToken.charCodeAt(i) ^ expectedToken.charCodeAt(i);
-	}
-	return diff === 0;
+	const a = Buffer.from(headerToken, 'utf-8');
+	const b = Buffer.from(expectedToken, 'utf-8');
+	return timingSafeEqual(a, b);
 }
 
 /**
@@ -63,6 +62,40 @@ export function validateCsrf(request: Request, env: Env): boolean {
 	// Origin matches, aber custom header fehlt → kann immer noch legitim sein
 	// (native <form> submission). Mit Token-basiertm CSRF wird dies überprüft.
 	return !!request.headers.get("X-Requested-With");
+}
+
+/**
+ * Kombinierte CSRF-Prüfung für authentifizierte Mutation-Endpoints.
+ * Gibt null zurück wenn OK, oder eine errResponse(403) bei Verstoß.
+ *
+ * Logik:
+ * - Kein Origin Header → Non-Browser (curl, mobile) → erlaubt
+ * - Foreign Origin → immer blockiert
+ * - Same-Origin → erlaubt wenn X-CSRF-Token ODER X-Requested-With vorhanden
+ */
+export function validateMutationCsrf(
+	request: Request,
+	env: { APP_BASE_URL: string; SESSION_SECRET: string }
+): Response | null {
+	const origin = request.headers.get("Origin");
+	if (!origin) return null; // Non-browser client
+
+	if (origin !== env.APP_BASE_URL) {
+		return errResponse("Invalid CSRF token", 403);
+	}
+
+	// Same-origin: Token ODER Legacy-Header erforderlich
+	const hasXRequestedWith = !!request.headers.get("X-Requested-With");
+	const sid = getCookie(request, "__Host-sid");
+	const hasValidToken = sid
+		? validateCsrfToken(request, sid, env.SESSION_SECRET)
+		: false;
+
+	if (!hasValidToken && !hasXRequestedWith) {
+		return errResponse("Invalid CSRF token", 403);
+	}
+
+	return null;
 }
 
 

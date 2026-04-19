@@ -1,3 +1,5 @@
+import { log } from "./utils";
+
 /**
  * 🔴 SICHERHEIT: Key-basiertes Rate Limiting mit D1.
  *
@@ -50,36 +52,36 @@ export async function checkRateLimit(
 	db: D1Database,
 	limit = 10
 ): Promise<{ allowed: boolean }> {
-	const window = currentWindow();
-	const cutoff = cutoffWindow();
+	try {
+		const window = currentWindow();
+		const cutoff = cutoffWindow();
 
-	// Clean up stale windows to prevent unbounded table growth
-	await db
-		.prepare("DELETE FROM rate_limits WHERE window_start < ?")
-		.bind(cutoff)
-		.run();
+		// Clean up stale windows to prevent unbounded table growth
+		await db
+			.prepare("DELETE FROM rate_limits WHERE window_start < ?")
+			.bind(cutoff)
+			.run();
 
-	// Upsert: create row if not exists, then increment
-	await db
-		.prepare(
-			"INSERT OR IGNORE INTO rate_limits (ip, window_start, count) VALUES (?, ?, 0)"
-		)
-		.bind(key, window)
-		.run();
+		// Atomic upsert: insert or increment in a single statement
+		await db
+			.prepare(
+				"INSERT INTO rate_limits (ip, window_start, count) VALUES (?, ?, 1) ON CONFLICT(ip, window_start) DO UPDATE SET count = count + 1"
+			)
+			.bind(key, window)
+			.run();
 
-	await db
-		.prepare(
-			"UPDATE rate_limits SET count = count + 1 WHERE ip = ? AND window_start = ?"
-		)
-		.bind(key, window)
-		.run();
+		const row = await db
+			.prepare("SELECT count FROM rate_limits WHERE ip = ? AND window_start = ?")
+			.bind(key, window)
+			.first<{ count: number }>();
 
-	const row = await db
-		.prepare("SELECT count FROM rate_limits WHERE ip = ? AND window_start = ?")
-		.bind(key, window)
-		.first<{ count: number }>();
-
-	return { allowed: (row?.count ?? 0) <= limit };
+		return { allowed: (row?.count ?? 0) <= limit };
+	} catch (e) {
+		// 🔴 SICHERHEIT: Fail-open bei DB-Fehler — Rate-Limiting darf den Service nicht crashen.
+		// Cloudflare bietet eigene DDoS-Mitigation, daher ist kurzzeitiger Ausfall des Limitings akzeptabel.
+		log("RATE_LIMIT", `DB error (fail-open): ${e instanceof Error ? e.message : String(e)}`);
+		return { allowed: true };
+	}
 }
 
 // 🔴 SICHERHEIT: Export für externe Nutzung

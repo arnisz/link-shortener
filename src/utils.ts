@@ -75,10 +75,10 @@ export function jsonResponse(data: unknown, status = 200): Response {
 	});
 }
 
-export function errResponse(message: string, status: number): Response {
+export function errResponse(message: string, status: number, extraHeaders?: Record<string, string>): Response {
 	return new Response(JSON.stringify({ error: message }), {
 		status,
-		headers: { "content-type": "application/json; charset=UTF-8" }
+		headers: { "content-type": "application/json; charset=UTF-8", ...extraHeaders }
 	});
 }
 

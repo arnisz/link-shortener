@@ -1,10 +1,11 @@
 import type { Env } from "../types";
 import { TARGET_URL_MAX_LEN, TITLE_MAX_LEN, SHORT_CODE_GENERATION_RETRIES } from "../config";
 import { randomId, jsonResponse, errResponse, log } from "../utils";
-import { isValidHttpUrl, validateAlias, isValidFutureIso, requireJson, generateShortCode, checkSpamFilter, validateTargetUrl } from "../validation";
+import { validateAlias, isValidFutureIso, requireJson, generateShortCode, checkSpamFilter, validateTargetUrl } from "../validation";
 import { checkRateLimit } from "../rateLimit";
 import { getSessionUser } from "../auth/session";
-import { validateCsrfToken } from "../csrf";
+import { validateCsrfToken, validateMutationCsrf } from "../csrf";
+import { getCookie } from "../utils";
 
 /** POST /api/links – creates a new shortened link. Requires authentication. */
 export async function handleCreateLink(request: Request, env: Env): Promise<Response> {
@@ -13,21 +14,9 @@ export async function handleCreateLink(request: Request, env: Env): Promise<Resp
 		return errResponse("Unauthorized", 401);
 	}
 
-	// 🔴 SICHERHEIT: CSRF-Schutz kombiniert: Token-basiert + Legacy Origin/X-Requested-With
-	const origin = request.headers.get("Origin");
-	const hasXRequestedWith = !!request.headers.get("X-Requested-With");
-	const hasValidToken = validateCsrfToken(request, user.id, env.SESSION_SECRET);
-
-	// Keine Origin Header = Non-Browser Client → OK
-	// Origin vorhanden, aber foreign → CSRF Attack
-	// Origin matches && valid token ODER (legacy) X-Requested-With → OK
-	// Sonst → blocked
-	if (origin && origin !== env.APP_BASE_URL) {
-		return errResponse("Invalid CSRF token", 403);
-	}
-	if (origin === env.APP_BASE_URL && !hasValidToken && !hasXRequestedWith) {
-		return errResponse("Invalid CSRF token", 403);
-	}
+	// 🔴 SICHERHEIT: Konsolidierte CSRF-Prüfung (P5-Fix)
+	const csrfError = validateMutationCsrf(request, env);
+	if (csrfError) return csrfError;
 
 	if (!requireJson(request)) {
 		return errResponse("Content-Type must be application/json", 415);
@@ -41,7 +30,9 @@ export async function handleCreateLink(request: Request, env: Env): Promise<Resp
 	}
 
 	const targetUrl = typeof body.target_url === "string" ? body.target_url.trim() : "";
-	if (!targetUrl || !isValidHttpUrl(targetUrl)) {
+	// P1-Fix: validateTargetUrl statt isValidHttpUrl für vollständigen SSRF-Schutz
+	const targetValidation = targetUrl ? validateTargetUrl(targetUrl) : { ok: false as const, error: "empty" };
+	if (!targetValidation.ok) {
 		return errResponse("Invalid or missing target_url", 400);
 	}
 	if (targetUrl.length > TARGET_URL_MAX_LEN) {
@@ -204,24 +195,16 @@ export async function handleGetLinks(request: Request, env: Env): Promise<Respon
 	});
 }
 
-/** POST /api/links/:id/update – updates title, alias, expires_at, and/or is_active. */
-export async function handleUpdateLink(linkId: string, request: Request, env: Env): Promise<Response> {
+/** POST /api/links/:code/update – updates title, alias, expires_at, and/or is_active. */
+export async function handleUpdateLink(code: string, request: Request, env: Env): Promise<Response> {
 	const user = await getSessionUser(request, env);
 	if (!user) {
 		return errResponse("Unauthorized", 401);
 	}
 
-	// 🔴 SICHERHEIT: CSRF-Schutz kombiniert: Token-basiert + Legacy Origin/X-Requested-With
-	const origin = request.headers.get("Origin");
-	const hasXRequestedWith = !!request.headers.get("X-Requested-With");
-	const hasValidToken = validateCsrfToken(request, user.id, env.SESSION_SECRET);
-
-	if (origin && origin !== env.APP_BASE_URL) {
-		return errResponse("Invalid CSRF token", 403);
-	}
-	if (origin === env.APP_BASE_URL && !hasValidToken && !hasXRequestedWith) {
-		return errResponse("Invalid CSRF token", 403);
-	}
+	// 🔴 SICHERHEIT: Konsolidierte CSRF-Prüfung (P5-Fix)
+	const csrfError = validateMutationCsrf(request, env);
+	if (csrfError) return csrfError;
 
 	if (!requireJson(request)) {
 		return errResponse("Content-Type must be application/json", 415);
@@ -262,8 +245,8 @@ export async function handleUpdateLink(linkId: string, request: Request, env: En
 		}
 
 		const conflict = await env.hello_cf_spa_db
-			.prepare("SELECT id FROM links WHERE short_code = ? AND id != ?")
-			.bind(normalizedAlias, linkId)
+			.prepare("SELECT id FROM links WHERE short_code = ? AND short_code != ?")
+			.bind(normalizedAlias, code)
 			.first<{ id: string }>();
 		if (conflict) {
 			return errResponse("Alias already in use", 409);
@@ -300,10 +283,11 @@ export async function handleUpdateLink(linkId: string, request: Request, env: En
 	setClauses.push("updated_at = ?");
 	// 🔴 SICHERHEIT: user_id DIREKT in WHERE-Clause für Ownership-Check
 	// Atomic operation verhindert TOCTOU Race Conditions
-	values.push(new Date().toISOString(), linkId, user.id);
+	// P0-Fix: short_code statt id — Route-Parameter ist der öffentliche short_code
+	values.push(new Date().toISOString(), code, user.id);
 
 	const result = await env.hello_cf_spa_db
-		.prepare(`UPDATE links SET ${setClauses.join(", ")} WHERE id = ? AND user_id = ?`)
+		.prepare(`UPDATE links SET ${setClauses.join(", ")} WHERE short_code = ? AND user_id = ?`)
 		.bind(...values)
 		.run();
 
@@ -313,12 +297,17 @@ export async function handleUpdateLink(linkId: string, request: Request, env: En
 		return errResponse("Link not found or access denied", 404);
 	}
 
+	// P0-Fix: Wenn alias geändert wurde, hat sich der short_code geändert → neuen Code für Re-Fetch verwenden
+	const fetchCode = (body.alias !== undefined && typeof body.alias === "string")
+		? body.alias.normalize("NFKC").replace(/[\u2010\u2011\u2012\u2013\u2014\u2212]/g, "-").trim()
+		: code;
+
 	const updated = await env.hello_cf_spa_db
 		.prepare(
 			`SELECT id, short_code, target_url, title, created_at, updated_at, click_count, expires_at, is_active
-			 FROM links WHERE id = ?`
+			 FROM links WHERE short_code = ? AND user_id = ?`
 		)
-		.bind(linkId)
+		.bind(fetchCode, user.id)
 		.first<{
 			id: string; short_code: string; target_url: string; title: string | null;
 			created_at: string; updated_at: string; click_count: number;
@@ -328,32 +317,24 @@ export async function handleUpdateLink(linkId: string, request: Request, env: En
 	return jsonResponse({ ...updated, short_url: `${env.APP_BASE_URL}/r/${updated!.short_code}` });
 }
 
-/** POST /api/links/:id/delete – permanently removes a link owned by the user. */
-export async function handleDeleteLink(linkId: string, request: Request, env: Env): Promise<Response> {
+/** POST /api/links/:code/delete – permanently removes a link owned by the user. */
+export async function handleDeleteLink(code: string, request: Request, env: Env): Promise<Response> {
 	const user = await getSessionUser(request, env);
 	if (!user) {
 		return errResponse("Unauthorized", 401);
 	}
 
-	// 🔴 SICHERHEIT: CSRF-Schutz kombiniert: Token-basiert + Legacy Origin/X-Requested-With
-	const origin = request.headers.get("Origin");
-	const hasXRequestedWith = !!request.headers.get("X-Requested-With");
-	const hasValidToken = validateCsrfToken(request, user.id, env.SESSION_SECRET);
-
-	if (origin && origin !== env.APP_BASE_URL) {
-		return errResponse("Invalid CSRF token", 403);
-	}
-	if (origin === env.APP_BASE_URL && !hasValidToken && !hasXRequestedWith) {
-		return errResponse("Invalid CSRF token", 403);
-	}
+	// 🔴 SICHERHEIT: Konsolidierte CSRF-Prüfung (P5-Fix)
+	const csrfError = validateMutationCsrf(request, env);
+	if (csrfError) return csrfError;
 
 	// 🔴 SICHERHEIT: user_id DIREKT in WHERE-Clause
 	// Atomic operation verhindert TOCTOU Race Conditions
 	const result = await env.hello_cf_spa_db
 		.prepare(
-			`DELETE FROM links WHERE id = ? AND user_id = ?`
+			`DELETE FROM links WHERE short_code = ? AND user_id = ?`
 		)
-		.bind(linkId, user.id)
+		.bind(code, user.id)
 		.run();
 
 	// Bewusst KEINE Unterscheidung zwischen "Not found" und "Forbidden" (404)
@@ -383,7 +364,9 @@ export async function handleCreateAnonymousLink(request: Request, env: Env): Pro
 	}
 
 	const targetUrl = typeof body.target_url === "string" ? body.target_url.trim() : "";
-	if (!targetUrl || !isValidHttpUrl(targetUrl)) {
+	// 🔴 SICHERHEIT: validateTargetUrl statt isValidHttpUrl für vollständigen SSRF-Schutz
+	const targetValidation = targetUrl ? validateTargetUrl(targetUrl) : { ok: false as const, error: "empty" };
+	if (!targetValidation.ok) {
 		return errResponse("Invalid or missing target_url", 400);
 	}
 	if (targetUrl.length > TARGET_URL_MAX_LEN) {
@@ -398,7 +381,7 @@ export async function handleCreateAnonymousLink(request: Request, env: Env): Pro
 	const ip = request.headers.get("CF-Connecting-IP") ?? "127.0.0.1";
 	const { allowed } = await checkRateLimit(ip, env.hello_cf_spa_db);
 	if (!allowed) {
-		return errResponse("Zu viele Anfragen. Bitte warte eine Minute.", 429);
+		return errResponse("Zu viele Anfragen. Bitte warte eine Minute.", 429, { "Retry-After": "60" });
 	}
 
 	// Auto-generate short code with collision retry
@@ -439,7 +422,7 @@ export async function handleRedirect(code: string, env: Env, ctx: ExecutionConte
 	const ip = request.headers.get("CF-Connecting-IP") ?? "127.0.0.1";
 	const { allowed } = await checkRateLimit(`redirect:${ip}`, env.hello_cf_spa_db, 60);
 	if (!allowed) {
-		return errResponse("Too many requests", 429);
+		return errResponse("Too many requests", 429, { "Retry-After": "60" });
 	}
 
 	const link = await env.hello_cf_spa_db
@@ -449,19 +432,19 @@ export async function handleRedirect(code: string, env: Env, ctx: ExecutionConte
 
 	if (!link) {
 		log("REDIRECT", `Not found: code="${code}"`);
-		return new Response("Short link not found", { status: 404 });
+		return errResponse("Short link not found", 404);
 	}
 
 	if (link.is_active === 0) {
 		log("REDIRECT", `Inactive: code="${code}"`);
-		return new Response("Short link not found", { status: 404 });
+		return errResponse("Short link not found", 404);
 	}
 
 	// MED-2: Einheitlich 404 statt 410 — verhindert Code-Enumeration via Status-Code-Unterschied.
 	// Angreifer können sonst via 410 erkennen, ob ein Code jemals existiert hat.
 	if (link.expires_at !== null && new Date(link.expires_at).getTime() < Date.now()) {
 		log("REDIRECT", `Expired: code="${code}"`);
-		return new Response("Short link not found", { status: 404 });
+		return errResponse("Short link not found", 404);
 	}
 
 	// 🔴 SICHERHEIT: Strikte URL-Validierung auch bei Redirect
