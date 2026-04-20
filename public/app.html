@@ -17,14 +17,14 @@
 		/* ── Page shell ── */
 		body {
 			margin: 0;
-			padding: 2rem 1rem 4rem;
+			padding: 2rem 0.2rem 4rem;
 			box-sizing: border-box;
 			min-height: 100vh;
 			/* background comes from style.css: #f4f6fb */
 		}
 
 		.app-page {
-			max-width: 640px;
+			max-width: 720px;
 			margin: 0 auto;
 			display: flex;
 			flex-direction: column;
@@ -241,9 +241,64 @@
 		.link-head {
 			display: flex;
 			align-items: center;
+			justify-content: space-between;
+			gap: 0.75rem;
+			margin-bottom: 0.6rem;
+			flex-wrap: nowrap; /* keep title + actions in one line */
+		}
+
+		.link-info {
+			display: flex;
+			align-items: center;
 			gap: 0.5rem;
 			flex-wrap: wrap;
-			margin-bottom: 0.4rem;
+			min-width: 0;
+			flex: 1;
+		}
+
+		.link-actions .btn-save,
+		.link-actions .btn-cancel {
+			margin-left: 0;
+		}
+
+		@media (max-width: 768px) {
+			/* Stack info above actions on small screens to prevent buttons overlapping alias */
+			.link-head {
+				flex-direction: column;
+				align-items: flex-start;
+				gap: 0.5rem;
+			}
+			.link-info {
+				width: 100%;
+			}
+			.link-title {
+				flex: 1 1 auto;
+				min-width: 0;
+				overflow: hidden;
+				text-overflow: ellipsis;
+				white-space: nowrap;
+			}
+			.link-alias {
+				flex: 0 0 auto;
+				white-space: nowrap;
+			}
+			.link-actions {
+				display: flex;
+				overflow-x: auto;
+				gap: 0.35rem;
+				flex-wrap: nowrap;
+				-webkit-overflow-scrolling: touch;
+				width: 100%;
+				padding-bottom: 0.15rem;
+				scrollbar-width: thin;
+			}
+			.link-actions::-webkit-scrollbar {
+				height: 6px;
+			}
+			.link-actions::-webkit-scrollbar-thumb {
+				background: rgba(0,0,0,0.08);
+				border-radius: 3px;
+			}
 		}
 
 		.link-title {
@@ -251,6 +306,11 @@
 			font-weight: 700;
 			color: #111827;
 			margin-right: 0.1rem;
+			flex: 1 1 auto; /* allow title to shrink when space is limited */
+			min-width: 0; /* allows proper flex shrinking in Firefox/Chrome */
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
 		}
 
 		.link-alias {
@@ -258,6 +318,8 @@
 			color: #6b7280;
 			font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 			margin-right: 0.2rem;
+			flex: 0 0 auto;
+			white-space: nowrap;
 		}
 
 		.link-inline-input {
@@ -283,10 +345,6 @@
 			font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 		}
 
-		/* Push action buttons to the right */
-		.link-head .btn-sm:first-of-type {
-			margin-left: auto;
-		}
 
 		.link-short {
 			font-size: 0.9rem;

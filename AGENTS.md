@@ -16,9 +16,9 @@ For all limits and quotas, retrieve from the product's `/platform/limits/` page.
 - Entry point: `src/index.ts` — plain `if`-chain router, no framework
 - Handlers: `src/handlers/` (`auth.ts`, `links.ts`)
 - Auth: Google OAuth (`src/auth/google.ts`, `src/auth/session.ts`)
-- CSRF protection: `src/csrf.ts` (`validateCsrf`, `validateCsrfToken`, `generateCsrfToken`)
+- CSRF protection: `src/csrf.ts` (`validateCsrf`, `validateCsrfToken`, `generateCsrfToken`, `validateMutationCsrf`)
 - Rate limiting: `src/rateLimit.ts` (`checkRateLimit`, `extractClientIp`)
-- Shared helpers: `src/utils.ts` (`jsonResponse`, `errResponse`, `applySecurityHeaders`, `log`, `randomId`, `escapeHtml`, `getCookie`)
+- Shared helpers: `src/utils.ts` (`jsonResponse`, `errResponse`, `applySecurityHeaders`, `log`, `randomId`, `escapeHtml`, `getCookie`, `makeSessionCookie`, `clearSessionCookie`)
 - Constants/limits: `src/config.ts`
 - Input validation: `src/validation.ts` (`generateShortCode`, `isValidHttpUrl`, `validateTargetUrl`, `validateAlias`, `buildGeoUrl`, `isValidFutureIso`, `requireJson`, `checkSpamFilter`)
 - DB schema migrations: `sql/` (apply in order: `init.sql` → `auth.sql` → `links.sql` → …)
@@ -39,7 +39,7 @@ Var set in `wrangler.jsonc`: `APP_BASE_URL=https://aadd.li`
 
 | Command | Purpose |
 |---------|---------|
-| `npx wrangler dev` | Local development |
+| `npx wrangler dev --env dev` | Local development (sets `APP_BASE_URL=http://127.0.0.1:8787` for CSRF) |
 | `npx wrangler deploy` | Deploy to Cloudflare |
 | `npx wrangler types` | Generate TypeScript types |
 | `npm test` | Run Vitest test suite (`@cloudflare/vitest-pool-workers`) |
@@ -76,20 +76,20 @@ For remote (production): replace `--local` with `--remote`.
 | GET | `/api/links` | `handleGetLinks` (cursor-based pagination: `?cursor=ISO\|id&limit=N`, default 50, max 100) |
 | POST | `/api/links/:code/update` | `handleUpdateLink` |
 | POST | `/api/links/:code/delete` | `handleDeleteLink` |
-| GET | `/r/:code` | `handleRedirect` (302 redirect) |
+| GET, HEAD | `/r/:code` | `handleRedirect` (302 redirect) |
 
 ## Conventions
 
 - **Security headers** are applied globally in `applySecurityHeaders` (called in `fetch`); do not set them per-handler.
-- **Error responses** always use `errResponse(message, status)` — never raw `new Response` for errors.
+- **Error responses** always use `errResponse(message, status, extraHeaders?)` — never raw `new Response` for errors. Use `extraHeaders` for headers like `Retry-After: 60` on 429 responses.
 - **Session cookie** name is `__Host-sid`; managed via `makeSessionCookie` / `clearSessionCookie`. The `__Host-` prefix enforces Secure, Path=/, and no Domain attribute.
 - **CSRF — two-layer protection**:
   1. Global: `validateCsrf(request, env)` in the router rejects cross-origin POSTs missing `X-Requested-With` (legacy layer, `src/csrf.ts`).
-  2. Per-handler: authenticated mutation endpoints (`handleCreateLink`, `handleUpdateLink`, `handleDeleteLink`) apply a combined check:
+  2. Per-handler: authenticated mutation endpoints (`handleCreateLink`, `handleUpdateLink`, `handleDeleteLink`) call `validateMutationCsrf(request, env)` which returns `Response | null`:
      - Foreign `Origin` header → always rejected (403).
-     - Same-origin request with `Origin: APP_BASE_URL` → requires either a valid `X-CSRF-Token` (`validateCsrfToken(request, user.id, env.SESSION_SECRET)`, HMAC-SHA256 of session ID) **or** `X-Requested-With` header.
+     - Same-origin request with `Origin: APP_BASE_URL` → requires either a valid `X-CSRF-Token` (HMAC-SHA256 of the session cookie value `__Host-sid`, via `validateCsrfToken`) **or** `X-Requested-With` header.
      - No `Origin` header (non-browser client) → allowed.
-  - Clients must send `X-CSRF-Token: <token>` obtained from `generateCsrfToken(sessionId, secret)`.
+  - Clients must send `X-CSRF-Token: <token>` obtained from `generateCsrfToken(sessionId, secret)` where `sessionId` is the `__Host-sid` cookie value.
 - **Rate limiting**: `checkRateLimit(key, db, limit?)` from `src/rateLimit.ts`; uses D1 `rate_limits` table with 1-minute tumbling windows. Default limit = 10 req/min. Keys are scoped by use-case: plain IP for anonymous links (10/min), `login:<ip>` for login (5/min), `redirect:<ip>` for redirects (60/min).
 - **Spam filter**: `checkSpamFilter(url, db)` from `src/validation.ts` — applied to anonymous link creation; returns `true` if blocked.
 - **URL validation**: `validateTargetUrl(raw)` from `src/validation.ts` — validates scheme (http/https only) and blocks SSRF targets (localhost, private IPs, IPv6 ULA/link-local). Used in `handleRedirect` to re-validate stored URLs before serving the redirect; returns `{ ok: true, url: URL } | { ok: false, error: string }`.

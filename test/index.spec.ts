@@ -1630,7 +1630,7 @@ describe("CSRF protection on POST routes", () => {
 				cookies: { "__Host-sid": sessionId },
 				headers: {
 					"content-type": "application/json",
-					"Origin": "https://aadd.li", // matches APP_BASE_URL from wrangler.jsonc
+					"Origin": env.APP_BASE_URL, // use actual env value (may come from .dev.vars)
 					// X-Requested-With intentionally absent
 				},
 				body: JSON.stringify({ target_url: "https://example.com" }),
@@ -1646,7 +1646,7 @@ describe("CSRF protection on POST routes", () => {
 				cookies: { "__Host-sid": sessionId },
 				headers: {
 					"content-type": "application/json",
-					"Origin": "https://aadd.li",
+					"Origin": env.APP_BASE_URL, // use actual env value (may come from .dev.vars)
 					"X-Requested-With": "XMLHttpRequest",
 				},
 				body: JSON.stringify({ target_url: "https://csrf-allowed.example.com" }),

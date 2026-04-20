@@ -44,6 +44,20 @@ export function validateCsrfToken(
 }
 
 /**
+ * Gibt alle akzeptierten Origins zurück: APP_BASE_URL + den eigenen Request-Origin.
+ * Damit funktioniert CSRF-Prüfung in jedem Environment (lokal, staging, prod)
+ * ohne zusätzliche Konfiguration.
+ */
+function getAllowedOrigins(request: Request, appBaseUrl: string): string[] {
+	const origins = new Set<string>([appBaseUrl]);
+	try {
+		const url = new URL(request.url);
+		origins.add(`${url.protocol}//${url.host}`);
+	} catch { /* ignore malformed URLs */ }
+	return [...origins];
+}
+
+/**
  * LEGACY: Origin + X-Requested-With Check für Backwards-Compatibility.
  * Neue CSRF-Validierung läuft in Session-basierten Endpoints ab.
  */
@@ -56,11 +70,11 @@ export function validateCsrf(request: Request, env: Env): boolean {
 		return true;
 	}
 
-	// Origin present but doesn't match → block
-	if (origin !== env.APP_BASE_URL) return false;
+	// Origin present but doesn't match any allowed origin → block
+	if (!getAllowedOrigins(request, env.APP_BASE_URL).includes(origin)) return false;
 
 	// Origin matches, aber custom header fehlt → kann immer noch legitim sein
-	// (native <form> submission). Mit Token-basiertm CSRF wird dies überprüft.
+	// (native <form> submission). Mit Token-basiertem CSRF wird dies überprüft.
 	return !!request.headers.get("X-Requested-With");
 }
 
@@ -80,7 +94,7 @@ export function validateMutationCsrf(
 	const origin = request.headers.get("Origin");
 	if (!origin) return null; // Non-browser client
 
-	if (origin !== env.APP_BASE_URL) {
+	if (!getAllowedOrigins(request, env.APP_BASE_URL).includes(origin)) {
 		return errResponse("Invalid CSRF token", 403);
 	}
 
@@ -97,5 +111,4 @@ export function validateMutationCsrf(
 
 	return null;
 }
-
 

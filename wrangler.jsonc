@@ -22,6 +22,20 @@
 	"vars": {
 		"APP_BASE_URL": "https://aadd.li"
 	},
+	"env": {
+		"dev": {
+			"vars": {
+				"APP_BASE_URL": "http://127.0.0.1:8787"
+			},
+			"d1_databases": [
+				{
+					"binding": "hello_cf_spa_db",
+					"database_name": "hello-cf-spa-db",
+					"database_id": "8d591c9b-42ac-4786-b33a-f0a6b2246cfb"
+				}
+			]
+		}
+	},
 	"upload_source_maps": true,
 	"compatibility_flags": [
 		"nodejs_compat"

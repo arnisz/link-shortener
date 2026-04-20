@@ -152,6 +152,12 @@ function renderLinkCard(l) {
 	const head = document.createElement("div");
 	head.className = "link-head";
 
+	const info = document.createElement("div");
+	info.className = "link-info";
+
+	const actions = document.createElement("div");
+	actions.className = "link-actions";
+
 	const titleDisplay = document.createElement("span");
 	titleDisplay.className = "link-title";
 
@@ -180,12 +186,11 @@ function renderLinkCard(l) {
 	}
 	syncTitleAndAliasDisplay();
 
-	head.appendChild(titleDisplay);
-	head.appendChild(aliasDisplay);
-	head.appendChild(titleInput);
-	head.appendChild(aliasInput);
-
-	head.appendChild(makeBadge(l));
+	info.appendChild(titleDisplay);
+	info.appendChild(aliasDisplay);
+	info.appendChild(titleInput);
+	info.appendChild(aliasInput);
+	info.appendChild(makeBadge(l));
 
 	const copyBtn = document.createElement("button");
 	copyBtn.className = "btn-sm";
@@ -196,37 +201,39 @@ function renderLinkCard(l) {
 	} else {
 		copyBtn.addEventListener("click", () => copyToClipboard(l.short_url, copyBtn));
 	}
-	head.appendChild(copyBtn);
+	actions.appendChild(copyBtn);
 
 	const editBtn = document.createElement("button");
-	editBtn.className = "btn-sm";
+	editBtn.className = "btn-sm btn-edit";
 	editBtn.textContent = translate("app.link.btn.edit");
-	head.appendChild(editBtn);
+	actions.appendChild(editBtn);
 
 	const saveBtn = document.createElement("button");
-	saveBtn.className = "btn-sm btn-sm-primary";
+	saveBtn.className = "btn-sm btn-sm-primary btn-save";
 	saveBtn.textContent = translate("app.link.btn.save");
 	saveBtn.style.display = "none";
-	head.appendChild(saveBtn);
+	actions.appendChild(saveBtn);
 
 	const cancelBtn = document.createElement("button");
-	cancelBtn.className = "btn-sm btn-sm-neutral";
+	cancelBtn.className = "btn-sm btn-sm-neutral btn-cancel";
 	cancelBtn.textContent = translate("app.link.btn.cancel");
 	cancelBtn.style.display = "none";
-	head.appendChild(cancelBtn);
+	actions.appendChild(cancelBtn);
 
 	const toggleBtn = document.createElement("button");
 	toggleBtn.className = "btn-sm";
 	toggleBtn.textContent = l.is_active ? translate("app.link.btn.deactivate") : translate("app.link.btn.activate");
 	toggleBtn.addEventListener("click", () => toggleLink(l.short_code, !!l.is_active));
-	head.appendChild(toggleBtn);
+	actions.appendChild(toggleBtn);
 
 	const deleteBtn = document.createElement("button");
 	deleteBtn.className = "btn-sm";
 	deleteBtn.textContent = translate("app.link.btn.delete");
 	deleteBtn.addEventListener("click", () => deleteLink(l.short_code));
-	head.appendChild(deleteBtn);
+	actions.appendChild(deleteBtn);
 
+	head.appendChild(info);
+	head.appendChild(actions);
 	row.appendChild(head);
 
 	// ── Short URL ──

@@ -13,8 +13,14 @@ async function router(request: Request, env: Env, ctx: ExecutionContext): Promis
 		return errResponse("CSRF validation failed", 403);
 	}
 
-	if (pathname === "/login" && method === "GET")                         return handleLogin(request, env);
-	if (pathname === "/api/auth/google/callback" && method === "GET")      return handleGoogleCallback(request, env);
+	if (pathname === "/login" && method === "GET")
+	{
+		return handleLogin(request, env);
+	}
+	if (pathname === "/api/auth/google/callback" && method === "GET")
+	{
+		return handleGoogleCallback(request, env);
+	}
 	if (pathname === "/api/me" && method === "GET")                        return handleGetMe(request, env);
 	if (pathname === "/logout" && method === "POST")                       return handleLogout(request, env);
 	if (pathname === "/api/links/anonymous" && method === "POST") return handleCreateAnonymousLink(request, env);
