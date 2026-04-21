@@ -160,6 +160,43 @@ export async function setupLinksTable(db: D1Database): Promise<void> {
 }
 
 /**
+ * Creates the tags and link_tags tables in the test D1 database.
+ */
+export async function setupTagsTables(db: D1Database): Promise<void> {
+	await db
+		.prepare(
+			`CREATE TABLE IF NOT EXISTS tags (` +
+			`id INTEGER PRIMARY KEY AUTOINCREMENT, ` +
+			`user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, ` +
+			`name TEXT NOT NULL, ` +
+			`created_at TEXT NOT NULL DEFAULT (datetime('now')), ` +
+			`UNIQUE(user_id, name))`
+		)
+		.run();
+
+	await db
+		.prepare(`CREATE INDEX IF NOT EXISTS idx_tags_user ON tags(user_id)`)
+		.run();
+
+	await db
+		.prepare(
+			`CREATE TABLE IF NOT EXISTS link_tags (` +
+			`link_id TEXT NOT NULL REFERENCES links(id) ON DELETE CASCADE, ` +
+			`tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE, ` +
+			`user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, ` +
+			`PRIMARY KEY (link_id, tag_id))`
+		)
+		.run();
+
+	await db
+		.prepare(`CREATE INDEX IF NOT EXISTS idx_link_tags_user ON link_tags(user_id)`)
+		.run();
+	await db
+		.prepare(`CREATE INDEX IF NOT EXISTS idx_link_tags_tag ON link_tags(tag_id)`)
+		.run();
+}
+
+/**
  * Inserts a link row for testing. Returns its id and shortCode.
  */
 export async function seedLink(

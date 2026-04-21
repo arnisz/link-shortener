@@ -1,7 +1,7 @@
 import type { Env } from "../types";
-import { TARGET_URL_MAX_LEN, TITLE_MAX_LEN, SHORT_CODE_GENERATION_RETRIES } from "../config";
+import { TARGET_URL_MAX_LEN, TITLE_MAX_LEN, SHORT_CODE_GENERATION_RETRIES, TAG_MAX_PER_LINK } from "../config";
 import { randomId, jsonResponse, errResponse, log } from "../utils";
-import { validateAlias, isValidFutureIso, requireJson, generateShortCode, checkSpamFilter, validateTargetUrl } from "../validation";
+import { validateAlias, isValidFutureIso, requireJson, generateShortCode, checkSpamFilter, validateTargetUrl, validateTag } from "../validation";
 import { checkRateLimit } from "../rateLimit";
 import { getSessionUser } from "../auth/session";
 import { validateCsrfToken, validateMutationCsrf } from "../csrf";
@@ -22,7 +22,7 @@ export async function handleCreateLink(request: Request, env: Env): Promise<Resp
 		return errResponse("Content-Type must be application/json", 415);
 	}
 
-	let body: { target_url?: unknown; title?: unknown; alias?: unknown; expires_at?: unknown };
+	let body: { target_url?: unknown; title?: unknown; alias?: unknown; expires_at?: unknown; tags?: unknown };
 	try {
 		body = await request.json();
 	} catch {
@@ -103,13 +103,66 @@ export async function handleCreateLink(request: Request, env: Env): Promise<Resp
 	const id = await randomId(16);
 	const now = new Date().toISOString();
 
-	await env.hello_cf_spa_db
-		.prepare(
-			`INSERT INTO links (id, user_id, short_code, target_url, title, created_at, updated_at, click_count, expires_at, is_active)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, 1)`
-		)
-		.bind(id, user.id, shortCode, targetUrl, title, now, now, expiresAt)
-		.run();
+	// Process tags if provided
+	let normalizedTags: string[] = [];
+	if (body.tags !== undefined) {
+		if (!Array.isArray(body.tags)) {
+			return errResponse("tags must be an array of strings", 400);
+		}
+		if (body.tags.length > TAG_MAX_PER_LINK) {
+			return errResponse(`Maximum ${TAG_MAX_PER_LINK} tags allowed per link`, 400);
+		}
+
+		const tagSet = new Set<string>();
+		for (const rawTag of body.tags) {
+			const validation = validateTag(String(rawTag));
+			if (!validation.ok) {
+				return errResponse(validation.error, 400);
+			}
+			tagSet.add(validation.name);
+		}
+		normalizedTags = Array.from(tagSet);
+	}
+
+	const batch: D1PreparedStatement[] = [];
+
+	// 1. Insert link
+	batch.push(
+		env.hello_cf_spa_db
+			.prepare(
+				`INSERT INTO links (id, user_id, short_code, target_url, title, created_at, updated_at, click_count, expires_at, is_active)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, 1)`
+			)
+			.bind(id, user.id, shortCode, targetUrl, title, now, now, expiresAt)
+	);
+
+	// 2. Insert tags and link_tags if present
+	if (normalizedTags.length > 0) {
+		for (const tagName of normalizedTags) {
+			batch.push(
+				env.hello_cf_spa_db
+					.prepare("INSERT OR IGNORE INTO tags (user_id, name) VALUES (?, ?)")
+					.bind(user.id, tagName)
+			);
+		}
+	}
+
+	await env.hello_cf_spa_db.batch(batch);
+
+	if (normalizedTags.length > 0) {
+		const junctionBatch: D1PreparedStatement[] = [];
+		for (const tagName of normalizedTags) {
+			junctionBatch.push(
+				env.hello_cf_spa_db
+					.prepare(`
+						INSERT INTO link_tags (link_id, tag_id, user_id)
+						SELECT ?, id, ? FROM tags WHERE user_id = ? AND name = ?
+					`)
+					.bind(id, user.id, user.id, tagName)
+			);
+		}
+		await env.hello_cf_spa_db.batch(junctionBatch);
+	}
 
 	return jsonResponse({
 		id,
@@ -122,6 +175,7 @@ export async function handleCreateLink(request: Request, env: Env): Promise<Resp
 		click_count: 0,
 		expires_at: expiresAt,
 		is_active: 1,
+		tags: normalizedTags,
 		short_url: `${env.APP_BASE_URL}/r/${shortCode}`
 	}, 201);
 }
@@ -141,17 +195,12 @@ export async function handleGetLinks(request: Request, env: Env): Promise<Respon
 	const url = new URL(request.url);
 	const cursorParam = url.searchParams.get("cursor");
 	const limitParam = url.searchParams.get("limit");
+	const q = url.searchParams.get("q")?.trim().slice(0, 100) || null;
 	const limit = Math.min(Math.max(parseInt(limitParam ?? "50", 10) || 50, 1), 100);
 
-	let cursorTs: string | null = null;
-	let cursorId: string | null = null;
-	if (cursorParam) {
-		const pipe = cursorParam.indexOf("|");
-		if (pipe > 0) {
-			cursorTs = cursorParam.slice(0, pipe);
-			cursorId = cursorParam.slice(pipe + 1);
-		}
-	}
+	const pipe = cursorParam ? cursorParam.indexOf("|") : -1;
+	const cursorTs = pipe > 0 ? cursorParam!.slice(0, pipe) : null;
+	const cursorId = pipe > 0 ? cursorParam!.slice(pipe + 1) : null;
 
 	type LinkRow = {
 		id: string;
@@ -165,32 +214,67 @@ export async function handleGetLinks(request: Request, env: Env): Promise<Respon
 		is_active: number;
 	};
 
-	const { results } = cursorTs && cursorId
-		? await env.hello_cf_spa_db
-			.prepare(
-				`SELECT id, short_code, target_url, title, created_at, updated_at, click_count, expires_at, is_active
-				 FROM links WHERE user_id = ?
-				 AND (created_at < ? OR (created_at = ? AND id < ?))
-				 ORDER BY created_at DESC, id DESC LIMIT ?`
+	let query = `SELECT id, short_code, target_url, title, created_at, updated_at, click_count, expires_at, is_active
+				 FROM links WHERE user_id = ?`;
+	const params: (string | number)[] = [user.id];
+
+	if (q) {
+		const term = `%${q.toLowerCase()}%`;
+		query += ` AND (
+			LOWER(short_code) LIKE ?
+			OR LOWER(title) LIKE ?
+			OR id IN (
+				SELECT lt.link_id FROM link_tags lt
+				JOIN tags t ON t.id = lt.tag_id
+				WHERE lt.user_id = ? AND LOWER(t.name) LIKE ?
 			)
-			.bind(user.id, cursorTs, cursorTs, cursorId, limit + 1)
-			.all<LinkRow>()
-		: await env.hello_cf_spa_db
-			.prepare(
-				`SELECT id, short_code, target_url, title, created_at, updated_at, click_count, expires_at, is_active
-				 FROM links WHERE user_id = ?
-				 ORDER BY created_at DESC, id DESC LIMIT ?`
-			)
-			.bind(user.id, limit + 1)
-			.all<LinkRow>();
+		)`;
+		params.push(term, term, user.id, term);
+	}
+
+	if (cursorTs && cursorId) {
+		query += ` AND (created_at < ? OR (created_at = ? AND id < ?))`;
+		params.push(cursorTs, cursorTs, cursorId);
+	}
+
+	query += ` ORDER BY created_at DESC, id DESC LIMIT ?`;
+	params.push(limit + 1);
+
+	const { results } = await env.hello_cf_spa_db.prepare(query).bind(...params).all<LinkRow>();
 
 	const hasMore = results.length > limit;
 	const links = hasMore ? results.slice(0, limit) : results;
 	const last = links[links.length - 1];
 	const nextCursor = hasMore && last ? `${last.created_at}|${last.id}` : null;
 
+	// Fetch tags for all links in one batch
+	const tagsMap: Record<string, string[]> = {};
+	if (links.length > 0) {
+		const linkIds = links.map(l => l.id);
+		const placeholders = linkIds.map(() => "?").join(",");
+		const tagsResult = await env.hello_cf_spa_db
+			.prepare(`
+				SELECT lt.link_id, t.name
+				FROM link_tags lt
+				JOIN tags t ON t.id = lt.tag_id
+				WHERE lt.user_id = ? AND lt.link_id IN (${placeholders})
+				ORDER BY t.name
+			`)
+			.bind(user.id, ...linkIds)
+			.all<{ link_id: string; name: string }>();
+
+		for (const row of tagsResult.results) {
+			if (!tagsMap[row.link_id]) tagsMap[row.link_id] = [];
+			tagsMap[row.link_id].push(row.name);
+		}
+	}
+
 	return jsonResponse({
-		links: links.map(l => ({ ...l, short_url: `${env.APP_BASE_URL}/r/${l.short_code}` })),
+		links: links.map(l => ({
+			...l,
+			tags: tagsMap[l.id] || [],
+			short_url: `${env.APP_BASE_URL}/r/${l.short_code}`
+		})),
 		nextCursor,
 	});
 }
@@ -210,12 +294,23 @@ export async function handleUpdateLink(code: string, request: Request, env: Env)
 		return errResponse("Content-Type must be application/json", 415);
 	}
 
-	let body: { title?: unknown; alias?: unknown; expires_at?: unknown; is_active?: unknown };
+	let body: { title?: unknown; alias?: unknown; expires_at?: unknown; is_active?: unknown; tags?: unknown };
 	try {
 		body = await request.json();
 	} catch {
 		return errResponse("Invalid JSON body", 400);
 	}
+
+	// First, check if link exists and belongs to user to get the internal ID
+	const existing = await env.hello_cf_spa_db
+		.prepare("SELECT id FROM links WHERE short_code = ? AND user_id = ?")
+		.bind(code, user.id)
+		.first<{ id: string }>();
+
+	if (!existing) {
+		return errResponse("Link not found or access denied", 404);
+	}
+	const linkId = existing.id;
 
 	const setClauses: string[] = [];
 	const values: (string | number | null)[] = [];
@@ -276,26 +371,91 @@ export async function handleUpdateLink(code: string, request: Request, env: Env)
 		values.push(body.is_active ? 1 : 0);
 	}
 
-	if (setClauses.length === 0) {
+	let normalizedTags: string[] | null = null;
+	if (body.tags !== undefined) {
+		if (!Array.isArray(body.tags)) {
+			return errResponse("tags must be an array of strings", 400);
+		}
+		if (body.tags.length > TAG_MAX_PER_LINK) {
+			return errResponse(`Maximum ${TAG_MAX_PER_LINK} tags allowed per link`, 400);
+		}
+
+		const tagSet = new Set<string>();
+		for (const rawTag of body.tags) {
+			const validation = validateTag(String(rawTag));
+			if (!validation.ok) {
+				return errResponse(validation.error, 400);
+			}
+			tagSet.add(validation.name);
+		}
+		normalizedTags = Array.from(tagSet);
+	}
+
+	if (setClauses.length === 0 && normalizedTags === null) {
 		return errResponse("Nothing to update", 400);
 	}
 
-	setClauses.push("updated_at = ?");
-	// 🔴 SICHERHEIT: user_id DIREKT in WHERE-Clause für Ownership-Check
-	// Atomic operation verhindert TOCTOU Race Conditions
-	// P0-Fix: short_code statt id — Route-Parameter ist der öffentliche short_code
-	values.push(new Date().toISOString(), code, user.id);
+	const batch: D1PreparedStatement[] = [];
 
-	const result = await env.hello_cf_spa_db
-		.prepare(`UPDATE links SET ${setClauses.join(", ")} WHERE short_code = ? AND user_id = ?`)
-		.bind(...values)
-		.run();
-
-	// D1 gibt meta.changes zurück — 0 = nicht gefunden ODER nicht Owner
-	// Bewusst KEINE Unterscheidung: verhindert User Enumeration
-	if (result.meta.changes === 0) {
-		return errResponse("Link not found or access denied", 404);
+	if (setClauses.length > 0) {
+		setClauses.push("updated_at = ?");
+		values.push(new Date().toISOString(), code, user.id);
+		batch.push(
+			env.hello_cf_spa_db
+				.prepare(`UPDATE links SET ${setClauses.join(", ")} WHERE short_code = ? AND user_id = ?`)
+				.bind(...values)
+		);
+	} else if (normalizedTags !== null) {
+		// If only tags changed, still update updated_at
+		batch.push(
+			env.hello_cf_spa_db
+				.prepare(`UPDATE links SET updated_at = ? WHERE id = ? AND user_id = ?`)
+				.bind(new Date().toISOString(), linkId, user.id)
+		);
 	}
+
+	if (normalizedTags !== null) {
+		// 1. Clear existing link_tags
+		batch.push(
+			env.hello_cf_spa_db
+				.prepare("DELETE FROM link_tags WHERE link_id = ? AND user_id = ?")
+				.bind(linkId, user.id)
+		);
+
+		// 2. Insert new tags (OR IGNORE)
+		for (const tagName of normalizedTags) {
+			batch.push(
+				env.hello_cf_spa_db
+					.prepare("INSERT OR IGNORE INTO tags (user_id, name) VALUES (?, ?)")
+					.bind(user.id, tagName)
+			);
+		}
+
+		// 3. Link them
+		for (const tagName of normalizedTags) {
+			batch.push(
+				env.hello_cf_spa_db
+					.prepare(`
+						INSERT INTO link_tags (link_id, tag_id, user_id)
+						SELECT ?, id, ? FROM tags WHERE user_id = ? AND name = ?
+					`)
+					.bind(linkId, user.id, user.id, tagName)
+			);
+		}
+
+		// 4. Cleanup orphaned tags
+		batch.push(
+			env.hello_cf_spa_db
+				.prepare(`
+					DELETE FROM tags
+					WHERE user_id = ?
+					  AND id NOT IN (SELECT tag_id FROM link_tags WHERE user_id = ?)
+				`)
+				.bind(user.id, user.id)
+		);
+	}
+
+	await env.hello_cf_spa_db.batch(batch);
 
 	// P0-Fix: Wenn alias geändert wurde, hat sich der short_code geändert → neuen Code für Re-Fetch verwenden
 	const fetchCode = (body.alias !== undefined && typeof body.alias === "string")
@@ -314,7 +474,26 @@ export async function handleUpdateLink(code: string, request: Request, env: Env)
 			expires_at: string | null; is_active: number;
 		}>();
 
-	return jsonResponse({ ...updated, short_url: `${env.APP_BASE_URL}/r/${updated!.short_code}` });
+	if (!updated) {
+		return errResponse("Link not found after update", 404);
+	}
+
+	// Fetch tags for the response
+	const tagRows = await env.hello_cf_spa_db
+		.prepare(`
+			SELECT t.name FROM tags t
+			JOIN link_tags lt ON t.id = lt.tag_id
+			WHERE lt.link_id = ? AND lt.user_id = ?
+			ORDER BY t.name
+		`)
+		.bind(updated.id, user.id)
+		.all<{ name: string }>();
+
+	return jsonResponse({
+		...updated,
+		tags: tagRows.results.map(r => r.name),
+		short_url: `${env.APP_BASE_URL}/r/${updated.short_code}`
+	});
 }
 
 /** POST /api/links/:code/delete – permanently removes a link owned by the user. */
@@ -343,6 +522,16 @@ export async function handleDeleteLink(code: string, request: Request, env: Env)
 		return errResponse("Link not found or access denied", 404);
 	}
 
+	// Cleanup orphaned tags for this user
+	await env.hello_cf_spa_db
+		.prepare(`
+			DELETE FROM tags
+			WHERE user_id = ?
+			  AND id NOT IN (SELECT tag_id FROM link_tags WHERE user_id = ?)
+		`)
+		.bind(user.id, user.id)
+		.run();
+
 	return jsonResponse({ ok: true });
 }
 
@@ -356,11 +545,15 @@ export async function handleCreateAnonymousLink(request: Request, env: Env): Pro
 		return errResponse("Content-Type must be application/json", 415);
 	}
 
-	let body: { target_url?: unknown };
+	let body: { target_url?: unknown; tags?: unknown };
 	try {
 		body = await request.json();
 	} catch {
 		return errResponse("Invalid JSON body", 400);
+	}
+
+	if (body.tags !== undefined) {
+		return errResponse("Anonymous links cannot have tags", 400);
 	}
 
 	const targetUrl = typeof body.target_url === "string" ? body.target_url.trim() : "";

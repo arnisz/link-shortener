@@ -18,9 +18,9 @@ For all limits and quotas, retrieve from the product's `/platform/limits/` page.
 - Auth: Google OAuth (`src/auth/google.ts`, `src/auth/session.ts`)
 - CSRF protection: `src/csrf.ts` (`validateCsrf`, `validateCsrfToken`, `generateCsrfToken`, `validateMutationCsrf`)
 - Rate limiting: `src/rateLimit.ts` (`checkRateLimit`, `extractClientIp`)
-- Shared helpers: `src/utils.ts` (`jsonResponse`, `errResponse`, `applySecurityHeaders`, `log`, `randomId`, `escapeHtml`, `getCookie`, `makeSessionCookie`, `clearSessionCookie`)
+- Shared helpers: `src/utils.ts` (`jsonResponse`, `errResponse`, `applySecurityHeaders`, `log`, `randomId`, `escapeHtml`, `getCookie`, `makeSessionCookie`, `clearSessionCookie`, `base64UrlDecode`)
 - Constants/limits: `src/config.ts`
-- Input validation: `src/validation.ts` (`generateShortCode`, `isValidHttpUrl`, `validateTargetUrl`, `validateAlias`, `buildGeoUrl`, `isValidFutureIso`, `requireJson`, `checkSpamFilter`)
+- Input validation: `src/validation.ts` (`generateShortCode`, `isValidHttpUrl`, `validateTargetUrl`, `validateAlias`, `buildGeoUrl`, `isValidFutureIso`, `requireJson`, `checkSpamFilter`, `validateTag`, `_resetSpamKeywordCache`)
 - DB schema migrations: `sql/` (apply in order: `init.sql` → `auth.sql` → `links.sql` → …)
 - Type-safe env: `src/types.ts` → `Env` interface
 
@@ -33,7 +33,7 @@ Required **secrets** (set via `wrangler secret put`):
 - `GOOGLE_CLIENT_SECRET`
 - `SESSION_SECRET`
 
-Var set in `wrangler.jsonc`: `APP_BASE_URL=https://aadd.li`
+Var set in `wrangler.jsonc`: `APP_BASE_URL=https://aadd.li`. Observability is enabled (`"observability": { "enabled": true }`).
 
 ## Commands
 
@@ -59,6 +59,7 @@ npx wrangler d1 execute hello-cf-spa-db --local --file=sql/links_phase3.sql
 npx wrangler d1 execute hello-cf-spa-db --local --file=sql/rate_limits.sql
 npx wrangler d1 execute hello-cf-spa-db --local --file=sql/spam_filter.sql
 npx wrangler d1 execute hello-cf-spa-db --local --file=sql/spam-keywords-extended.sql
+npx wrangler d1 execute hello-cf-spa-db --local --file=sql/links_phase4_tags.sql
 ```
 
 For remote (production): replace `--local` with `--remote`.
@@ -91,11 +92,13 @@ For remote (production): replace `--local` with `--remote`.
      - No `Origin` header (non-browser client) → allowed.
   - Clients must send `X-CSRF-Token: <token>` obtained from `generateCsrfToken(sessionId, secret)` where `sessionId` is the `__Host-sid` cookie value.
 - **Rate limiting**: `checkRateLimit(key, db, limit?)` from `src/rateLimit.ts`; uses D1 `rate_limits` table with 1-minute tumbling windows. Default limit = 10 req/min. Keys are scoped by use-case: plain IP for anonymous links (10/min), `login:<ip>` for login (5/min), `redirect:<ip>` for redirects (60/min).
-- **Spam filter**: `checkSpamFilter(url, db)` from `src/validation.ts` — applied to anonymous link creation; returns `true` if blocked.
+- **Spam filter**: `checkSpamFilter(url, db)` from `src/validation.ts` — applied to anonymous link creation; returns `true` if blocked. Keywords are loaded from the `spam_keywords` table and **cached in module scope for 5 minutes** (TTL). Use `_resetSpamKeywordCache()` in tests to ensure isolation between test runs.
 - **URL validation**: `validateTargetUrl(raw)` from `src/validation.ts` — validates scheme (http/https only) and blocks SSRF targets (localhost, private IPs, IPv6 ULA/link-local). Used in `handleRedirect` to re-validate stored URLs before serving the redirect; returns `{ ok: true, url: URL } | { ok: false, error: string }`.
 - **Input requirements**: All mutation endpoints require `Content-Type: application/json`; enforced via `requireJson(request)`.
 - **Alias normalization**: User-supplied aliases are NFKC-normalized and Unicode dashes (`‐‑‒–—−`) replaced with `-` before `validateAlias()` is called.
 - **Short codes**: 6-char alphanumeric, bias-free generation in `generateShortCode` (`src/validation.ts`).
+- **Hashtags**: Authenticated users can assign up to 10 tags per link (limit `TAG_MAX_PER_LINK`). Tags are normalized (NFKC, lowercase, leading # removed, trim), 1–50 chars, starting with alphanumeric `[a-z0-9][a-z0-9_-]*`. Tags are validated via `validateTag(raw)` in `src/validation.ts`. Tags are strictly user-scoped; orphaned tags are garbage collected after each mutation (`UPDATE`, `DELETE`). **Tag updates are full-replace**: sending `tags: []` removes all tags; sending `tags: ["foo"]` replaces all existing tags with `["foo"]`. D1 tag operations use **two-phase batching** because junction-table inserts (`link_tags`) need the AUTOINCREMENT `tag_id` — first batch inserts into `tags`, second batch inserts into `link_tags` using a `SELECT … WHERE name = ?` subquery.
+- **Search**: `GET /api/links?q=<term>` searches via case-insensitive substring in alias, title, and tag names. Term is trimmed and capped at 100 chars. Case-insensitivity is ensured via `LOWER()` in SQL.
 - **Alias reserved words**: `["api", "login", "logout", "app", "r"]` — checked in `ALIAS_RESERVED`.
 - **Logging**: use `log(category, message)` from `src/utils.ts`; it wraps `console.log` with `[category]` prefix.
 - **HTML escaping**: use `escapeHtml(str)` from `src/utils.ts` for any user-supplied content embedded in HTML contexts.

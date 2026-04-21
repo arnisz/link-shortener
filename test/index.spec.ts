@@ -23,7 +23,7 @@ import {
 	vi,
 } from "vitest";
 import worker from "../src/index";
-import { makeRequest, buildFakeIdToken, setupTestDb, seedSession, setupLinksTable, seedLink, setupRateLimitTable } from "./helpers";
+import { makeRequest, buildFakeIdToken, setupTestDb, seedSession, setupLinksTable, seedLink, setupRateLimitTable, setupTagsTables } from "./helpers";
 
 const BASE = "https://example.com";
 
@@ -33,6 +33,7 @@ beforeAll(async () => {
 	await setupTestDb(env.hello_cf_spa_db);
 	await setupLinksTable(env.hello_cf_spa_db);
 	await setupRateLimitTable(env.hello_cf_spa_db);
+	await setupTagsTables(env.hello_cf_spa_db);
 });
 
 // ── Clean DB state before every test ─────────────────────────────────────────
@@ -42,6 +43,8 @@ beforeEach(async () => {
 	await env.hello_cf_spa_db.prepare("DELETE FROM sessions").run();
 	await env.hello_cf_spa_db.prepare("DELETE FROM users").run();
 	await env.hello_cf_spa_db.prepare("DELETE FROM rate_limits").run();
+	await env.hello_cf_spa_db.prepare("DELETE FROM tags").run();
+	await env.hello_cf_spa_db.prepare("DELETE FROM link_tags").run();
 });
 
 // ── Tiny helper: call the worker and wait for ctx ─────────────────────────────

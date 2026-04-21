@@ -51,6 +51,38 @@
 			gap: 1rem;
 		}
 
+		.search-wrap {
+			flex: 1;
+			max-width: 300px;
+			position: relative;
+		}
+
+		.search-input {
+			width: 100%;
+			padding: 0.5rem 0.75rem 0.5rem 2.25rem;
+			font-size: 0.875rem;
+			border: 1px solid #e5e7eb;
+			border-radius: 999px;
+			outline: none;
+			transition: border-color 0.15s, box-shadow 0.15s;
+			background: #f9fafb;
+		}
+
+		.search-input:focus {
+			border-color: #93c5fd;
+			box-shadow: 0 0 0 3px rgba(147, 197, 253, 0.25);
+			background: #fff;
+		}
+
+		.search-icon {
+			position: absolute;
+			left: 0.85rem;
+			top: 50%;
+			transform: translateY(-50%);
+			color: #9ca3af;
+			pointer-events: none;
+		}
+
 		.brand {
 			font-size: 1.5rem;
 			font-weight: 800;
@@ -371,6 +403,84 @@
 			margin-top: 0.15rem;
 		}
 
+		/* ── Tags ── */
+		.tag-container {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 0.35rem;
+			margin: 0.5rem 0;
+		}
+
+		.tag-chip {
+			display: inline-flex;
+			align-items: center;
+			background: #eff6ff;
+			color: #1e40af;
+			font-size: 0.75rem;
+			font-weight: 600;
+			padding: 0.15rem 0.5rem;
+			border-radius: 6px;
+			border: 1px solid #dbeafe;
+			cursor: pointer;
+			transition: background 0.15s, border-color 0.15s;
+		}
+
+		.tag-chip:hover {
+			background: #dbeafe;
+			border-color: #bfdbfe;
+		}
+
+		.tag-input-wrap {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 0.4rem;
+			padding: 0.4rem;
+			border: 1px solid #e5e7eb;
+			border-radius: 8px;
+			background: #fff;
+			min-height: 2.4rem;
+			align-items: center;
+		}
+
+		.tag-input-wrap:focus-within {
+			border-color: #93c5fd;
+			box-shadow: 0 0 0 3px rgba(147, 197, 253, 0.25);
+		}
+
+		.tag-input-wrap .tag-chip {
+			cursor: default;
+			padding-right: 0.3rem;
+		}
+
+		.tag-remove {
+			display: inline-flex;
+			margin-left: 0.25rem;
+			cursor: pointer;
+			color: #60a5fa;
+			border-radius: 50%;
+			width: 14px;
+			height: 14px;
+			align-items: center;
+			justify-content: center;
+			font-size: 10px;
+			line-height: 1;
+		}
+
+		.tag-remove:hover {
+			background: #bfdbfe;
+			color: #1e40af;
+		}
+
+		.tag-bare-input {
+			border: none;
+			outline: none;
+			flex: 1;
+			min-width: 80px;
+			font-size: 0.875rem;
+			font-family: inherit;
+			padding: 0.2rem;
+		}
+
 		/* ── Badges ── */
 		.badge {
 			display: inline-block;
@@ -485,6 +595,10 @@
 		<header class="app-header">
 			<div class="app-brand-row">
 				<div class="brand" data-i18n="brand">aadd.li</div>
+				<div class="search-wrap" id="search-container" hidden>
+					<span class="search-icon">🔍</span>
+					<input type="search" id="q" class="search-input" data-i18n-placeholder="app.search.placeholder" placeholder="Suche Links, Tags…" />
+				</div>
 				<form id="logout-form" hidden>
 					<button type="button" id="logout-btn" class="btn-ghost" data-i18n="app.logout">Abmelden</button>
 				</form>
@@ -519,6 +633,12 @@
 							<label for="f-alias" data-i18n="app.create.alias">Alias (optional)</label>
 							<input type="text" id="f-alias" name="alias" data-i18n-placeholder="app.create.alias.placeholder" placeholder="mein-link"
 								pattern="[a-zA-Z0-9_-]{3,50}" data-i18n-title="app.create.alias.title" title="3–50 Zeichen: Buchstaben (a–z, A–Z), Ziffern, Bindestrich (-), Unterstrich (_)" />
+						</div>
+					</div>
+					<div class="field">
+						<label data-i18n="app.create.tags">Tags (optional, max. 10)</label>
+						<div class="tag-input-wrap" id="create-tag-wrap">
+							<input type="text" class="tag-bare-input" id="create-tag-input" data-i18n-placeholder="app.create.tags.placeholder" placeholder="Tag eingeben..." />
 						</div>
 					</div>
 					<div class="field">

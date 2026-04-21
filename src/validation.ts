@@ -1,4 +1,4 @@
-import { SHORT_CODE_LENGTH, SHORT_CODE_CHARS } from "./config";
+import { SHORT_CODE_LENGTH, SHORT_CODE_CHARS, TAG_NAME_MAX_LEN } from "./config";
 import { log } from "./utils";
 
 export const ALIAS_REGEX = /^[a-zA-Z0-9_-]{3,50}$/;
@@ -176,4 +176,43 @@ export async function checkSpamFilter(url: string, db: D1Database): Promise<bool
 	}
 	const lowerUrl = url.toLowerCase();
 	return spamKeywordCache?.some(kw => lowerUrl.includes(kw)) ?? false;
+}
+
+/**
+ * Validates a tag name.
+ * Rules:
+ * - NFKC normalization.
+ * - Leading # removed.
+ * - Trim + lowercase.
+ * - Allowed: [a-z0-9][a-z0-9_-]{0,49}
+ * - Max length: TAG_NAME_MAX_LEN (50)
+ */
+export function validateTag(raw: string): { ok: true; name: string } | { ok: false; error: string } {
+	if (typeof raw !== "string") return { ok: false, error: "Tag must be a string" };
+
+	// 1. NFKC normalization
+	let name = raw.normalize("NFKC");
+
+	// 2. Remove leading # if present
+	if (name.startsWith("#")) {
+		name = name.slice(1);
+	}
+
+	// 3. Trim + Lowercase
+	name = name.trim().toLowerCase();
+
+	// 4. Check length
+	if (name.length === 0) {
+		return { ok: false, error: "Tag name cannot be empty" };
+	}
+	if (name.length > TAG_NAME_MAX_LEN) {
+		return { ok: false, error: `Tag name too long (max ${TAG_NAME_MAX_LEN})` };
+	}
+
+	// 5. Check allowed characters: [a-z0-9][a-z0-9_-]{0,49}
+	if (!/^[a-z0-9][a-z0-9_-]*$/.test(name)) {
+		return { ok: false, error: "Tag must start with a letter/digit and contain only letters, digits, hyphens or underscores" };
+	}
+
+	return { ok: true, name };
 }

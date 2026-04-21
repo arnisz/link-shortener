@@ -10,7 +10,7 @@
 import { env, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import worker from "../src/index";
-import { makeRequest, setupTestDb, setupLinksTable, setupSpamTable, setupRateLimitTable } from "./helpers";
+import { makeRequest, setupTestDb, setupLinksTable, setupSpamTable, setupRateLimitTable, setupTagsTables } from "./helpers";
 
 const BASE = "https://example.com";
 const CLIENT_IP = "1.2.3.4";
@@ -22,6 +22,7 @@ beforeAll(async () => {
 	await setupLinksTable(env.hello_cf_spa_db);
 	await setupSpamTable(env.hello_cf_spa_db);
 	await setupRateLimitTable(env.hello_cf_spa_db);
+	await setupTagsTables(env.hello_cf_spa_db);
 });
 
 // ── Clean mutable tables before each test ────────────────────────────────────
@@ -29,6 +30,8 @@ beforeAll(async () => {
 beforeEach(async () => {
 	await env.hello_cf_spa_db.prepare("DELETE FROM links").run();
 	await env.hello_cf_spa_db.prepare("DELETE FROM rate_limits").run();
+	await env.hello_cf_spa_db.prepare("DELETE FROM tags").run();
+	await env.hello_cf_spa_db.prepare("DELETE FROM link_tags").run();
 	// Do NOT delete spam_keywords: module-scope cache is already warm after first query.
 });
 

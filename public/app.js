@@ -22,6 +22,9 @@ const authState = {
 let createStatusState = { type: "idle", message: "" };
 let isLocationBusy = false;
 let csrfToken = null;
+let createTagHandler = null;
+let _q = "";
+let _searchDebounce = null;
 
 /** Returns mutation headers with CSRF token (if available) + legacy X-Requested-With. */
 function mutationHeaders(contentType) {
@@ -47,6 +50,82 @@ function copyToClipboard(text, btn) {
 function fmtDate(iso) {
 	if (!iso) return "";
 	return new Date(iso).toLocaleString(getActiveLocale(), { dateStyle: "short", timeStyle: "short" });
+}
+
+function escapeHtml(str) {
+	if (!str) return "";
+	const p = document.createElement("p");
+	p.textContent = str;
+	return p.innerHTML;
+}
+
+/** Helper for Tag Chip UI */
+function createTagChip(name, onRemove) {
+	const chip = document.createElement("span");
+	chip.className = "tag-chip";
+	chip.textContent = name;
+	if (onRemove) {
+		const remove = document.createElement("span");
+		remove.className = "tag-remove";
+		remove.textContent = "×";
+		remove.addEventListener("click", (e) => {
+			e.stopPropagation();
+			onRemove();
+		});
+		chip.appendChild(remove);
+	}
+	return chip;
+}
+
+function initTagInput(wrapId, inputId, tags = []) {
+	const wrap = document.getElementById(wrapId);
+	const input = document.getElementById(inputId);
+	if (!wrap || !input) return { getTags: () => [] };
+
+	const state = { tags: [...tags] };
+
+	function render() {
+		wrap.querySelectorAll(".tag-chip").forEach(c => c.remove());
+		state.tags.forEach((t, i) => {
+			wrap.insertBefore(createTagChip(t, () => {
+				state.tags.splice(i, 1);
+				render();
+			}), input);
+		});
+	}
+
+	input.addEventListener("keydown", (e) => {
+		if (e.key === "Enter" || e.key === ",") {
+			e.preventDefault();
+			const val = input.value.trim().replace(/^#/, "").toLowerCase();
+			if (val && !state.tags.includes(val) && state.tags.length < 10) {
+				state.tags.push(val);
+				input.value = "";
+				render();
+			}
+		} else if (e.key === "Backspace" && !input.value && state.tags.length > 0) {
+			state.tags.pop();
+			render();
+		}
+	});
+
+	render();
+
+	function flush() {
+		const val = input.value.trim().replace(/^#/, "").toLowerCase();
+		if (val && !state.tags.includes(val) && state.tags.length < 10) {
+			state.tags.push(val);
+			input.value = "";
+			render();
+		}
+	}
+
+	return {
+		getTags: () => state.tags,
+		setTags: (newTags) => { state.tags = [...newTags]; render(); },
+		reset: () => { state.tags = []; input.value = ""; render(); },
+		flush,
+	};
 }
 
 function setCreateStatus(type, message = "") {
@@ -94,6 +173,8 @@ function renderAuthStatus() {
 		statusEl.appendChild(a);
 		logoutForm.hidden = true;
 		linkSection.hidden = true;
+		const sc = document.getElementById("search-container");
+		if (sc) sc.hidden = true;
 		return;
 	}
 
@@ -101,6 +182,8 @@ function renderAuthStatus() {
 		statusEl.textContent = `${translate("app.loggedin")} ${authState.email}`;
 		logoutForm.hidden = false;
 		linkSection.hidden = false;
+		const sc = document.getElementById("search-container");
+		if (sc) sc.hidden = false;
 		return;
 	}
 
@@ -108,12 +191,16 @@ function renderAuthStatus() {
 		statusEl.textContent = `${translate("app.load.error")} ${authState.errorMessage}`;
 		logoutForm.hidden = true;
 		linkSection.hidden = true;
+		const sc = document.getElementById("search-container");
+		if (sc) sc.hidden = true;
 		return;
 	}
 
 	statusEl.textContent = translate("app.links.loading");
 	logoutForm.hidden = true;
 	linkSection.hidden = true;
+	const sc = document.getElementById("search-container");
+	if (sc) sc.hidden = true;
 }
 
 function setLocationButtonState(busy) {
@@ -262,20 +349,72 @@ function renderLinkCard(l) {
 	metaStats.textContent = stats;
 	row.appendChild(metaStats);
 
+	// ── Tags ──
+	const tagContainer = document.createElement("div");
+	tagContainer.className = "tag-container";
+	function renderTags() {
+		tagContainer.innerHTML = "";
+		if (l.tags && l.tags.length > 0) {
+			l.tags.forEach(t => {
+				const chip = createTagChip(t);
+				chip.addEventListener("click", (e) => {
+					e.stopPropagation();
+					const searchInput = document.getElementById("q");
+					if (searchInput) {
+						searchInput.value = t;
+						_q = t;
+						loadLinks();
+					}
+				});
+				tagContainer.appendChild(chip);
+			});
+		}
+	}
+	renderTags();
+	row.appendChild(tagContainer);
+
+	// ── Edit Tags UI ──
+	const editTagWrap = document.createElement("div");
+	editTagWrap.className = "tag-input-wrap";
+	editTagWrap.style.marginTop = "0.5rem";
+	editTagWrap.style.display = "none";
+	const editTagInput = document.createElement("input");
+	editTagInput.className = "tag-bare-input";
+	editTagInput.placeholder = translate("app.create.tags.placeholder");
+	editTagWrap.appendChild(editTagInput);
+	row.appendChild(editTagWrap);
+
+	// Generate unique IDs for the tag handler
+	const wrapId = `tw-${Math.random().toString(36).slice(2)}`;
+	const inputId = `ti-${Math.random().toString(36).slice(2)}`;
+	editTagWrap.id = wrapId;
+	editTagInput.id = inputId;
+	let editTagHandler = null;
+
 	let originalTitle = l.title || "";
 	let originalAlias = l.short_code;
+	let originalTags = [...(l.tags || [])];
 
 	function enterEditMode() {
 		clearCardError(row);
 		originalTitle = l.title || "";
 		originalAlias = l.short_code;
+		originalTags = [...(l.tags || [])];
 		titleInput.value = originalTitle;
 		aliasInput.value = originalAlias;
 
+		if (!editTagHandler) {
+			editTagHandler = initTagInput(wrapId, inputId, originalTags);
+		} else {
+			editTagHandler.setTags(originalTags);
+		}
+
 		titleDisplay.style.display = "none";
 		aliasDisplay.style.display = "none";
+		tagContainer.style.display = "none";
 		titleInput.style.display = "";
 		aliasInput.style.display = "";
+		editTagWrap.style.display = "flex";
 		editBtn.style.display = "none";
 		saveBtn.style.display = "";
 		cancelBtn.style.display = "";
@@ -285,8 +424,10 @@ function renderLinkCard(l) {
 	function exitEditMode() {
 		titleDisplay.style.display = "";
 		aliasDisplay.style.display = "";
+		tagContainer.style.display = "flex";
 		titleInput.style.display = "none";
 		aliasInput.style.display = "none";
+		editTagWrap.style.display = "none";
 		editBtn.style.display = "";
 		saveBtn.style.display = "none";
 		cancelBtn.style.display = "none";
@@ -303,6 +444,8 @@ function renderLinkCard(l) {
 	saveBtn.addEventListener("click", async () => {
 		const newTitle = titleInput.value.trim();
 		const newAlias = aliasInput.value.trim();
+		if (editTagHandler) editTagHandler.flush();
+		const newTags = editTagHandler ? editTagHandler.getTags() : l.tags;
 		clearCardError(row);
 		saveBtn.disabled = true;
 		cancelBtn.disabled = true;
@@ -312,7 +455,7 @@ function renderLinkCard(l) {
 			const res = await fetch(`/api/links/${l.short_code}/update`, {
 				method: "POST",
 				headers: mutationHeaders("application/json"),
-				body: JSON.stringify({ title: newTitle, alias: newAlias }),
+				body: JSON.stringify({ title: newTitle, alias: newAlias, tags: newTags }),
 			});
 			const data = await res.json().catch(() => ({}));
 			if (!res.ok) {
@@ -323,8 +466,10 @@ function renderLinkCard(l) {
 			l.title = data.title ?? (newTitle || null);
 			l.short_code = data.short_code ?? newAlias;
 			l.short_url = data.short_url ?? `${window.location.origin}/r/${l.short_code}`;
+			l.tags = data.tags ?? newTags;
 
 			syncTitleAndAliasDisplay();
+			renderTags();
 			anchor.href = l.short_url;
 			anchor.textContent = l.short_url;
 			exitEditMode();
@@ -351,6 +496,7 @@ let _observer   = null;
 async function fetchLinks(cursor, limit) {
 	const params = new URLSearchParams({ limit: String(limit) });
 	if (cursor) params.set("cursor", cursor);
+	if (_q) params.set("q", _q);
 	const resp = await fetch(`/api/links?${params}`);
 	if (resp.status === 401) throw Object.assign(new Error("Unauthorized"), { status: 401 });
 	if (!resp.ok) throw Object.assign(new Error(resp.statusText || "Request failed"), { status: resp.status });
@@ -528,12 +674,15 @@ document.getElementById("create-form").addEventListener("submit", async (e) => {
 	e.preventDefault();
 	setCreateStatus("submitting");
 	const form = e.currentTarget;
+	if (createTagHandler) createTagHandler.flush();
+	const tags = createTagHandler ? createTagHandler.getTags() : [];
 
 	const expiresRaw = form.elements["expires_at"].value;
 	const body = {
 		target_url: form.elements["target_url"].value.trim(),
 		title:      form.elements["title"].value.trim() || undefined,
 		alias:      form.elements["alias"].value.trim() || undefined,
+		tags:       tags.length > 0 ? tags : undefined,
 		// Convert datetime-local to UTC ISO so the Worker receives a proper timestamp
 		expires_at: expiresRaw ? new Date(expiresRaw).toISOString() : undefined,
 	};
@@ -551,6 +700,7 @@ document.getElementById("create-form").addEventListener("submit", async (e) => {
 		}
 		setCreateStatus("success", data.short_url);
 		form.reset();
+		if (createTagHandler) createTagHandler.reset();
 		await loadLinks();
 	} catch (err) {
 		setCreateStatus("error", err.message || String(err) || translate("error.app.create"));
@@ -599,6 +749,27 @@ async function loadMe() {
 }
 
 loadMe();
+
+// Initialisierung von Tags und Suche
+createTagHandler = initTagInput("create-tag-wrap", "create-tag-input");
+
+const searchInput = document.getElementById("q");
+if (searchInput) {
+	searchInput.addEventListener("input", (e) => {
+		clearTimeout(_searchDebounce);
+		_q = e.target.value.trim();
+		_searchDebounce = setTimeout(() => {
+			loadLinks();
+		}, 300);
+	});
+	searchInput.addEventListener("keydown", (e) => {
+		if (e.key === "Escape") {
+			searchInput.value = "";
+			_q = "";
+			loadLinks();
+		}
+	});
+}
 
 // ── Location link (PWA only) ──────────────────────────────────────────────────
 

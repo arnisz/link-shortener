@@ -14,3 +14,5 @@ export const SHORT_CODE_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTU
 /** Hard limits for user-supplied strings. */
 export const TARGET_URL_MAX_LEN = 2000;
 export const TITLE_MAX_LEN = 200;
+export const TAG_MAX_PER_LINK = 10;
+export const TAG_NAME_MAX_LEN = 50;
