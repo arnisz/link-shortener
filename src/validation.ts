@@ -4,6 +4,11 @@ import { log } from "./utils";
 export const ALIAS_REGEX = /^[a-zA-Z0-9_-]{3,50}$/;
 export const ALIAS_RESERVED = new Set(["api", "login", "logout", "app", "r"]);
 
+/** NFKC-normalise a raw alias, replace Unicode dashes with ASCII hyphen, and trim whitespace. */
+export function normalizeAlias(raw: string): string {
+	return raw.normalize("NFKC").replace(/[\u2010\u2011\u2012\u2013\u2014\u2212]/g, "-").trim();
+}
+
 export function generateShortCode(length = SHORT_CODE_LENGTH): string {
 	const charsetLen = SHORT_CODE_CHARS.length;
 	// Reject bytes >= maxUnbiased to eliminate modulo bias.

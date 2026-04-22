@@ -1,11 +1,51 @@
 import type { Env } from "../types";
 import { TARGET_URL_MAX_LEN, TITLE_MAX_LEN, SHORT_CODE_GENERATION_RETRIES, TAG_MAX_PER_LINK } from "../config";
 import { randomId, jsonResponse, errResponse, log } from "../utils";
-import { validateAlias, isValidFutureIso, requireJson, generateShortCode, checkSpamFilter, validateTargetUrl, validateTag } from "../validation";
+import { validateAlias, normalizeAlias, isValidFutureIso, requireJson, generateShortCode, checkSpamFilter, validateTargetUrl, validateTag } from "../validation";
 import { checkRateLimit } from "../rateLimit";
 import { getSessionUser } from "../auth/session";
 import { validateCsrfToken, validateMutationCsrf } from "../csrf";
 import { getCookie } from "../utils";
+
+// ---------------------------------------------------------------------------
+// Private helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Tries to generate a unique short code by retrying up to SHORT_CODE_GENERATION_RETRIES times.
+ * Returns the code on success, or `null` when every candidate already exists in the DB.
+ */
+async function generateUniqueShortCode(db: D1Database): Promise<string | null> {
+	for (let i = 0; i < SHORT_CODE_GENERATION_RETRIES; i++) {
+		const candidate = generateShortCode();
+		const existing = await db.prepare("SELECT id FROM links WHERE short_code = ?").bind(candidate).first();
+		if (!existing) return candidate;
+	}
+	return null;
+}
+
+/**
+ * Parses and validates a `tags` field from a request body.
+ * Returns the deduplicated, normalised tag array on success,
+ * or a ready-to-return error `Response` on failure.
+ */
+function parseTags(tags: unknown): { ok: true; tags: string[] } | { ok: false; response: Response } {
+	if (!Array.isArray(tags)) {
+		return { ok: false, response: errResponse("tags must be an array of strings", 400) };
+	}
+	if (tags.length > TAG_MAX_PER_LINK) {
+		return { ok: false, response: errResponse(`Maximum ${TAG_MAX_PER_LINK} tags allowed per link`, 400) };
+	}
+	const tagSet = new Set<string>();
+	for (const rawTag of tags) {
+		const validation = validateTag(String(rawTag));
+		if (!validation.ok) {
+			return { ok: false, response: errResponse(validation.error, 400) };
+		}
+		tagSet.add(validation.name);
+	}
+	return { ok: true, tags: Array.from(tagSet) };
+}
 
 /** POST /api/links – creates a new shortened link. Requires authentication. */
 export async function handleCreateLink(request: Request, env: Env): Promise<Response> {
@@ -59,10 +99,7 @@ export async function handleCreateLink(request: Request, env: Env): Promise<Resp
 
 	const normalizedAlias =
 		typeof body.alias === "string"
-			? body.alias
-					.normalize("NFKC")
-					.replace(/[\u2010\u2011\u2012\u2013\u2014\u2212]/g, "-")
-					.trim()
+			? normalizeAlias(body.alias)
 			: "";
 
 	let shortCode: string;
@@ -85,15 +122,7 @@ export async function handleCreateLink(request: Request, env: Env): Promise<Resp
 		shortCode = normalizedAlias;
 	} else {
 		// Auto-generate – retry up to SHORT_CODE_GENERATION_RETRIES times on collision
-		let generated = "";
-		for (let i = 0; i < SHORT_CODE_GENERATION_RETRIES; i++) {
-			const candidate = generateShortCode();
-			const existing = await env.hello_cf_spa_db
-				.prepare("SELECT id FROM links WHERE short_code = ?")
-				.bind(candidate)
-				.first();
-			if (!existing) { generated = candidate; break; }
-		}
+		const generated = await generateUniqueShortCode(env.hello_cf_spa_db);
 		if (!generated) {
 			return errResponse("Could not generate unique short code", 500);
 		}
@@ -106,22 +135,9 @@ export async function handleCreateLink(request: Request, env: Env): Promise<Resp
 	// Process tags if provided
 	let normalizedTags: string[] = [];
 	if (body.tags !== undefined) {
-		if (!Array.isArray(body.tags)) {
-			return errResponse("tags must be an array of strings", 400);
-		}
-		if (body.tags.length > TAG_MAX_PER_LINK) {
-			return errResponse(`Maximum ${TAG_MAX_PER_LINK} tags allowed per link`, 400);
-		}
-
-		const tagSet = new Set<string>();
-		for (const rawTag of body.tags) {
-			const validation = validateTag(String(rawTag));
-			if (!validation.ok) {
-				return errResponse(validation.error, 400);
-			}
-			tagSet.add(validation.name);
-		}
-		normalizedTags = Array.from(tagSet);
+		const result = parseTags(body.tags);
+		if (!result.ok) return result.response;
+		normalizedTags = result.tags;
 	}
 
 	const batch: D1PreparedStatement[] = [];
@@ -329,10 +345,7 @@ export async function handleUpdateLink(code: string, request: Request, env: Env)
 			return errResponse("alias must be a string", 400);
 		}
 
-		const normalizedAlias = body.alias
-			.normalize("NFKC")
-			.replace(/[\u2010\u2011\u2012\u2013\u2014\u2212]/g, "-")
-			.trim();
+		const normalizedAlias = normalizeAlias(body.alias);
 
 		const aliasError = validateAlias(normalizedAlias);
 		if (aliasError) {
@@ -373,22 +386,9 @@ export async function handleUpdateLink(code: string, request: Request, env: Env)
 
 	let normalizedTags: string[] | null = null;
 	if (body.tags !== undefined) {
-		if (!Array.isArray(body.tags)) {
-			return errResponse("tags must be an array of strings", 400);
-		}
-		if (body.tags.length > TAG_MAX_PER_LINK) {
-			return errResponse(`Maximum ${TAG_MAX_PER_LINK} tags allowed per link`, 400);
-		}
-
-		const tagSet = new Set<string>();
-		for (const rawTag of body.tags) {
-			const validation = validateTag(String(rawTag));
-			if (!validation.ok) {
-				return errResponse(validation.error, 400);
-			}
-			tagSet.add(validation.name);
-		}
-		normalizedTags = Array.from(tagSet);
+		const result = parseTags(body.tags);
+		if (!result.ok) return result.response;
+		normalizedTags = result.tags;
 	}
 
 	if (setClauses.length === 0 && normalizedTags === null) {
@@ -459,7 +459,7 @@ export async function handleUpdateLink(code: string, request: Request, env: Env)
 
 	// P0-Fix: Wenn alias geändert wurde, hat sich der short_code geändert → neuen Code für Re-Fetch verwenden
 	const fetchCode = (body.alias !== undefined && typeof body.alias === "string")
-		? body.alias.normalize("NFKC").replace(/[\u2010\u2011\u2012\u2013\u2014\u2212]/g, "-").trim()
+		? normalizeAlias(body.alias)
 		: code;
 
 	const updated = await env.hello_cf_spa_db
@@ -578,15 +578,7 @@ export async function handleCreateAnonymousLink(request: Request, env: Env): Pro
 	}
 
 	// Auto-generate short code with collision retry
-	let shortCode = "";
-	for (let i = 0; i < SHORT_CODE_GENERATION_RETRIES; i++) {
-		const candidate = generateShortCode();
-		const existing = await env.hello_cf_spa_db
-			.prepare("SELECT id FROM links WHERE short_code = ?")
-			.bind(candidate)
-			.first();
-		if (!existing) { shortCode = candidate; break; }
-	}
+	const shortCode = await generateUniqueShortCode(env.hello_cf_spa_db);
 	if (!shortCode) {
 		return errResponse("Could not generate unique short code", 500);
 	}
