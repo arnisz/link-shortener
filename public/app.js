@@ -94,12 +94,21 @@ function initTagInput(wrapId, inputId, tags = []) {
 		});
 	}
 
+	/** Normalise and add a single raw value; returns true if added. */
+	function addTag(raw) {
+		const val = raw.trim().replace(/^#/, "").toLowerCase();
+		if (val && !state.tags.includes(val) && state.tags.length < 10) {
+			state.tags.push(val);
+			return true;
+		}
+		return false;
+	}
+
+	// Desktop: keydown fires reliably with e.key === "," / "Enter"
 	input.addEventListener("keydown", (e) => {
 		if (e.key === "Enter" || e.key === ",") {
 			e.preventDefault();
-			const val = input.value.trim().replace(/^#/, "").toLowerCase();
-			if (val && !state.tags.includes(val) && state.tags.length < 10) {
-				state.tags.push(val);
+			if (addTag(input.value)) {
 				input.value = "";
 				render();
 			}
@@ -109,12 +118,21 @@ function initTagInput(wrapId, inputId, tags = []) {
 		}
 	});
 
+	// Android / mobile: virtual keyboards (IME) fire keydown with e.key === "Unidentified"
+	// instead of the actual key. Detect comma (and space) via the input event instead.
+	input.addEventListener("input", () => {
+		if (input.value.includes(",") || input.value.includes(" ")) {
+			let changed = false;
+			input.value.split(/[, ]+/).forEach(part => { if (addTag(part)) changed = true; });
+			input.value = "";
+			if (changed) render();
+		}
+	});
+
 	render();
 
 	function flush() {
-		const val = input.value.trim().replace(/^#/, "").toLowerCase();
-		if (val && !state.tags.includes(val) && state.tags.length < 10) {
-			state.tags.push(val);
+		if (addTag(input.value)) {
 			input.value = "";
 			render();
 		}
