@@ -1,12 +1,22 @@
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import { env, SELF } from "cloudflare:test";
-import { setupTestDb, setupLinksTable, setupTagsTables, seedSession, makeRequest, seedLink } from "./helpers";
+import { setupTestDb, setupLinksTable, setupTagsTables, setupRateLimitTable, seedSession, makeRequest, seedLink } from "./helpers";
 
 describe("Tags & Search", () => {
 	beforeAll(async () => {
 		await setupTestDb(env.hello_cf_spa_db);
 		await setupLinksTable(env.hello_cf_spa_db);
 		await setupTagsTables(env.hello_cf_spa_db);
+		await setupRateLimitTable(env.hello_cf_spa_db);
+	});
+
+	beforeEach(async () => {
+		await env.hello_cf_spa_db.prepare("DELETE FROM link_tags").run();
+		await env.hello_cf_spa_db.prepare("DELETE FROM links").run();
+		await env.hello_cf_spa_db.prepare("DELETE FROM tags").run();
+		await env.hello_cf_spa_db.prepare("DELETE FROM sessions").run();
+		await env.hello_cf_spa_db.prepare("DELETE FROM users").run();
+		await env.hello_cf_spa_db.prepare("DELETE FROM rate_limits").run();
 	});
 
 	describe("Tag Validation & Normalization", () => {

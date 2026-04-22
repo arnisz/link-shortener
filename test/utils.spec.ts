@@ -14,6 +14,8 @@ import {
 	errResponse,
 	log,
 	randomId,
+	escapeHtml,
+	applySecurityHeaders,
 } from "../src/utils";
 
 // ── base64UrlDecode ───────────────────────────────────────────────────────────
@@ -105,6 +107,11 @@ describe("makeSessionCookie", () => {
 		expect(cookie).toContain("sid=mysession");
 	});
 
+	it("uses the __Host-sid= cookie name (security-critical __Host- prefix)", () => {
+		const cookie = makeSessionCookie("mysession", 3600);
+		expect(cookie).toContain("__Host-sid=mysession");
+	});
+
 	it("includes the correct Max-Age", () => {
 		const cookie = makeSessionCookie("s", 7200);
 		expect(cookie).toContain("Max-Age=7200");
@@ -125,6 +132,10 @@ describe("makeSessionCookie", () => {
 // ── clearSessionCookie ────────────────────────────────────────────────────────
 
 describe("clearSessionCookie", () => {
+	it("uses the __Host-sid= cookie name", () => {
+		expect(clearSessionCookie()).toContain("__Host-sid=");
+	});
+
 	it("sets sid= to an empty value", () => {
 		expect(clearSessionCookie()).toContain("sid=");
 		// Ensure it's not a real session ID
@@ -185,6 +196,12 @@ describe("errResponse", () => {
 		const res = errResponse("oops", 500);
 		expect(res.headers.get("content-type")).toContain("application/json");
 	});
+
+	it("includes extra headers when provided", () => {
+		const res = errResponse("rate limited", 429, { "Retry-After": "60" });
+		expect(res.headers.get("Retry-After")).toBe("60");
+		expect(res.status).toBe(429);
+	});
 });
 
 // ── randomId ──────────────────────────────────────────────────────────────────
@@ -221,3 +238,102 @@ describe("log", () => {
 		expect(() => log("REDIRECT", "redirect log")).not.toThrow();
 	});
 });
+
+// ── escapeHtml ────────────────────────────────────────────────────────────────
+
+describe("escapeHtml", () => {
+	it("escapes & to &amp;", () => {
+		expect(escapeHtml("a&b")).toBe("a&amp;b");
+	});
+
+	it("escapes < to &lt;", () => {
+		expect(escapeHtml("<script>")).toBe("&lt;script&gt;");
+	});
+
+	it("escapes > to &gt;", () => {
+		expect(escapeHtml("a>b")).toBe("a&gt;b");
+	});
+
+	it('escapes " to &quot;', () => {
+		expect(escapeHtml('"quoted"')).toBe("&quot;quoted&quot;");
+	});
+
+	it("escapes ' to &#x27;", () => {
+		expect(escapeHtml("it's")).toBe("it&#x27;s");
+	});
+
+	it("escapes all special characters in one string", () => {
+		expect(escapeHtml(`<script>alert("XSS '1'")</script>&done`)).toBe(
+			"&lt;script&gt;alert(&quot;XSS &#x27;1&#x27;&quot;)&lt;/script&gt;&amp;done"
+		);
+	});
+
+	it("returns the string unchanged if no special characters are present", () => {
+		expect(escapeHtml("hello world")).toBe("hello world");
+	});
+
+	it("returns empty string for empty input", () => {
+		expect(escapeHtml("")).toBe("");
+	});
+});
+
+// ── applySecurityHeaders ──────────────────────────────────────────────────────
+
+describe("applySecurityHeaders", () => {
+	function makeResponse(status = 200, body = "ok"): Response {
+		return new Response(body, { status });
+	}
+
+	it("preserves the original status code", () => {
+		expect(applySecurityHeaders(makeResponse(201)).status).toBe(201);
+		expect(applySecurityHeaders(makeResponse(404)).status).toBe(404);
+	});
+
+	it("preserves the original body", async () => {
+		const res = applySecurityHeaders(makeResponse(200, "hello"));
+		expect(await res.text()).toBe("hello");
+	});
+
+	it("sets X-Frame-Options: DENY", () => {
+		const res = applySecurityHeaders(makeResponse());
+		expect(res.headers.get("X-Frame-Options")).toBe("DENY");
+	});
+
+	it("sets X-Content-Type-Options: nosniff", () => {
+		const res = applySecurityHeaders(makeResponse());
+		expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
+	});
+
+	it("sets Referrer-Policy: strict-origin", () => {
+		const res = applySecurityHeaders(makeResponse());
+		expect(res.headers.get("Referrer-Policy")).toBe("strict-origin");
+	});
+
+	it("sets Content-Security-Policy with frame-ancestors 'none'", () => {
+		const csp = applySecurityHeaders(makeResponse()).headers.get("Content-Security-Policy") ?? "";
+		expect(csp).toContain("frame-ancestors 'none'");
+	});
+
+	it("sets Content-Security-Policy with default-src 'self'", () => {
+		const csp = applySecurityHeaders(makeResponse()).headers.get("Content-Security-Policy") ?? "";
+		expect(csp).toContain("default-src 'self'");
+	});
+
+	it("sets Strict-Transport-Security with max-age", () => {
+		const hsts = applySecurityHeaders(makeResponse()).headers.get("Strict-Transport-Security") ?? "";
+		expect(hsts).toContain("max-age=31536000");
+		expect(hsts).toContain("includeSubDomains");
+	});
+
+	it("sets Permissions-Policy", () => {
+		const pp = applySecurityHeaders(makeResponse()).headers.get("Permissions-Policy") ?? "";
+		expect(pp.length).toBeGreaterThan(0);
+	});
+
+	it("preserves existing headers on the response", () => {
+		const base = new Response("ok", { headers: { "content-type": "application/json" } });
+		const res = applySecurityHeaders(base);
+		expect(res.headers.get("content-type")).toContain("application/json");
+	});
+});
+

@@ -16,6 +16,8 @@ import {
 	ALIAS_REGEX,
 	ALIAS_RESERVED,
 	buildGeoUrl,
+	validateTargetUrl,
+	validateTag,
 } from "../src/validation";
 import { SHORT_CODE_CHARS } from "../src/config";
 
@@ -398,6 +400,212 @@ describe("buildGeoUrl", () => {
 	it("blocks negative latitude at boundary", () => {
 		const url = buildGeoUrl("-90.0", "0.0");
 		expect(url).toContain("q=-90%2C0");
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// validateTargetUrl — SSRF protection
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("validateTargetUrl", () => {
+	it("accepts a valid https URL", () => {
+		const r = validateTargetUrl("https://example.com/path?q=1");
+		expect(r.ok).toBe(true);
+	});
+
+	it("accepts a valid http URL", () => {
+		const r = validateTargetUrl("http://example.com");
+		expect(r.ok).toBe(true);
+	});
+
+	it("the returned URL object has the normalised href", () => {
+		const r = validateTargetUrl("https://example.com");
+		if (!r.ok) throw new Error("unexpected");
+		expect(r.url.href).toBe("https://example.com/");
+	});
+
+	it("rejects a non-parseable string", () => {
+		expect(validateTargetUrl("not a url").ok).toBe(false);
+	});
+
+	it("rejects ftp:// URLs", () => {
+		expect(validateTargetUrl("ftp://files.example.com").ok).toBe(false);
+	});
+
+	it("rejects javascript: URLs", () => {
+		expect(validateTargetUrl("javascript:alert(1)").ok).toBe(false);
+	});
+
+	it("rejects data: URLs", () => {
+		expect(validateTargetUrl("data:text/html,<h1>hi</h1>").ok).toBe(false);
+	});
+
+	it("rejects localhost", () => {
+		expect(validateTargetUrl("http://localhost/admin").ok).toBe(false);
+	});
+
+	it("rejects 127.0.0.1", () => {
+		expect(validateTargetUrl("http://127.0.0.1/secret").ok).toBe(false);
+	});
+
+	it("rejects IPv6 loopback ::1", () => {
+		expect(validateTargetUrl("http://[::1]/").ok).toBe(false);
+	});
+
+	it("rejects 0.0.0.0", () => {
+		expect(validateTargetUrl("http://0.0.0.0/").ok).toBe(false);
+	});
+
+	it("rejects hostname ending in .internal", () => {
+		expect(validateTargetUrl("http://service.internal/api").ok).toBe(false);
+	});
+
+	it("rejects hostname ending in .localhost", () => {
+		expect(validateTargetUrl("http://app.localhost/").ok).toBe(false);
+	});
+
+	it("rejects 10.x.x.x private IP", () => {
+		expect(validateTargetUrl("http://10.0.0.1/").ok).toBe(false);
+	});
+
+	it("rejects 192.168.x.x private IP", () => {
+		expect(validateTargetUrl("http://192.168.1.1/router").ok).toBe(false);
+	});
+
+	it("rejects 172.16–31.x.x private IP (lower bound)", () => {
+		expect(validateTargetUrl("http://172.16.0.1/").ok).toBe(false);
+	});
+
+	it("rejects 172.16–31.x.x private IP (upper bound)", () => {
+		expect(validateTargetUrl("http://172.31.255.255/").ok).toBe(false);
+	});
+
+	it("accepts 172.32.x.x (not in private range)", () => {
+		expect(validateTargetUrl("http://172.32.0.1/").ok).toBe(true);
+	});
+
+	it("rejects 169.254.x.x (link-local / AWS metadata)", () => {
+		expect(validateTargetUrl("http://169.254.169.254/latest/meta-data/").ok).toBe(false);
+	});
+
+	it("rejects IPv6 ULA fc00:: range", () => {
+		expect(validateTargetUrl("http://[fc00::1]/").ok).toBe(false);
+	});
+
+	it("rejects IPv6 link-local fe80:: range", () => {
+		expect(validateTargetUrl("http://[fe80::1]/").ok).toBe(false);
+	});
+
+	it("rejects IPv6-mapped IPv4 ::ffff:", () => {
+		expect(validateTargetUrl("http://[::ffff:127.0.0.1]/").ok).toBe(false);
+	});
+
+	it("rejects hex-encoded IP (0x7f000001 = 127.0.0.1)", () => {
+		expect(validateTargetUrl("http://0x7f000001/").ok).toBe(false);
+	});
+
+	it("rejects decimal-encoded IP (2130706433 = 127.0.0.1)", () => {
+		expect(validateTargetUrl("http://2130706433/").ok).toBe(false);
+	});
+
+	it("rejects octal IP (0177.0.0.1)", () => {
+		expect(validateTargetUrl("http://0177.0.0.1/").ok).toBe(false);
+	});
+
+	it("returns an error string when URL is invalid", () => {
+		const r = validateTargetUrl("not-a-url");
+		if (r.ok) throw new Error("unexpected");
+		expect(typeof r.error).toBe("string");
+		expect(r.error.length).toBeGreaterThan(0);
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// validateTag
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("validateTag", () => {
+	it("accepts a simple lowercase alphanumeric tag", () => {
+		const r = validateTag("work");
+		expect(r.ok).toBe(true);
+		if (r.ok) expect(r.name).toBe("work");
+	});
+
+	it("accepts a tag with hyphens and underscores", () => {
+		const r = validateTag("my-tag_1");
+		expect(r.ok).toBe(true);
+		if (r.ok) expect(r.name).toBe("my-tag_1");
+	});
+
+	it("strips leading # and lowercases", () => {
+		const r = validateTag("#Work");
+		expect(r.ok).toBe(true);
+		if (r.ok) expect(r.name).toBe("work");
+	});
+
+	it("trims whitespace", () => {
+		const r = validateTag("  project  ");
+		expect(r.ok).toBe(true);
+		if (r.ok) expect(r.name).toBe("project");
+	});
+
+	it("lowercases uppercase input", () => {
+		const r = validateTag("URGENT");
+		expect(r.ok).toBe(true);
+		if (r.ok) expect(r.name).toBe("urgent");
+	});
+
+	it("applies NFKC normalization", () => {
+		// U+2126 OHM SIGN normalises to U+03A9 OMEGA → lowercased to ω
+		const r = validateTag("\u2126");
+		// The NFKC-normalized, lowercased form must satisfy the regex or be rejected
+		// Since ω is not [a-z0-9], this should fail
+		expect(r.ok).toBe(false);
+	});
+
+	it("rejects a tag that is just '#'", () => {
+		const r = validateTag("#");
+		expect(r.ok).toBe(false);
+	});
+
+	it("rejects an empty string", () => {
+		const r = validateTag("");
+		expect(r.ok).toBe(false);
+	});
+
+	it("rejects a tag longer than 50 characters", () => {
+		const r = validateTag("a".repeat(51));
+		expect(r.ok).toBe(false);
+	});
+
+	it("accepts a tag of exactly 50 characters", () => {
+		const r = validateTag("a".repeat(50));
+		expect(r.ok).toBe(true);
+	});
+
+	it("rejects a tag starting with a hyphen", () => {
+		const r = validateTag("-start");
+		expect(r.ok).toBe(false);
+	});
+
+	it("rejects a tag starting with an underscore", () => {
+		const r = validateTag("_start");
+		expect(r.ok).toBe(false);
+	});
+
+	it("rejects a tag containing spaces", () => {
+		const r = validateTag("my tag");
+		expect(r.ok).toBe(false);
+	});
+
+	it("rejects a tag containing special characters like @", () => {
+		const r = validateTag("tag@foo");
+		expect(r.ok).toBe(false);
+	});
+
+	it("rejects non-string input", () => {
+		const r = validateTag(123 as unknown as string);
+		expect(r.ok).toBe(false);
 	});
 });
 

@@ -73,9 +73,11 @@ export function validateCsrf(request: Request, env: Env): boolean {
 	// Origin present but doesn't match any allowed origin → block
 	if (!getAllowedOrigins(request, env.APP_BASE_URL).includes(origin)) return false;
 
-	// Origin matches, aber custom header fehlt → kann immer noch legitim sein
-	// (native <form> submission). Mit Token-basiertem CSRF wird dies überprüft.
-	return !!request.headers.get("X-Requested-With");
+	// Origin matches: either a custom fetch header (X-Requested-With) or a valid
+	// CSRF token header must be present. The token VALUE is validated per-handler
+	// by validateMutationCsrf; here we only require the header to be present so
+	// that simple form-submissions (which cannot set custom headers) remain blocked.
+	return !!request.headers.get("X-Requested-With") || !!request.headers.get("X-CSRF-Token");
 }
 
 /**

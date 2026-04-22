@@ -70,7 +70,7 @@ For remote (production): replace `--local` with `--remote`.
 |--------|------|---------|
 | GET | `/login` | `handleLogin` |
 | GET | `/api/auth/google/callback` | `handleGoogleCallback` |
-| GET | `/api/me` | `handleGetMe` |
+| GET | `/api/me` | `handleGetMe` — returns `{ authenticated: false }` or `{ authenticated: true, user, csrfToken }` |
 | POST | `/logout` | `handleLogout` |
 | POST | `/api/links/anonymous` | `handleCreateAnonymousLink` |
 | POST | `/api/links` | `handleCreateLink` |
@@ -91,7 +91,7 @@ For remote (production): replace `--local` with `--remote`.
      - Same-origin request with `Origin: APP_BASE_URL` → requires either a valid `X-CSRF-Token` (HMAC-SHA256 of the session cookie value `__Host-sid`, via `validateCsrfToken`) **or** `X-Requested-With` header.
      - No `Origin` header (non-browser client) → allowed.
   - Clients must send `X-CSRF-Token: <token>` obtained from `generateCsrfToken(sessionId, secret)` where `sessionId` is the `__Host-sid` cookie value.
-- **Rate limiting**: `checkRateLimit(key, db, limit?)` from `src/rateLimit.ts`; uses D1 `rate_limits` table with 1-minute tumbling windows. Default limit = 10 req/min. Keys are scoped by use-case: plain IP for anonymous links (10/min), `login:<ip>` for login (5/min), `redirect:<ip>` for redirects (60/min).
+- **Rate limiting**: `checkRateLimit(key, db, limit?)` from `src/rateLimit.ts`; uses D1 `rate_limits` table with 1-minute tumbling windows. Default limit = 10 req/min. Keys are scoped by use-case: plain IP for anonymous links (10/min), `login:<ip>` for login (5/min), `redirect:<ip>` for redirects (60/min). **Fails open** on D1 error (deliberate — brief outage is acceptable given Cloudflare's own DDoS mitigation). Stale windows older than 5 minutes are cleaned up on each check.
 - **Spam filter**: `checkSpamFilter(url, db)` from `src/validation.ts` — applied to anonymous link creation; returns `true` if blocked. Keywords are loaded from the `spam_keywords` table and **cached in module scope for 5 minutes** (TTL). Use `_resetSpamKeywordCache()` in tests to ensure isolation between test runs.
 - **URL validation**: `validateTargetUrl(raw)` from `src/validation.ts` — validates scheme (http/https only) and blocks SSRF targets (localhost, private IPs, IPv6 ULA/link-local). Used in `handleRedirect` to re-validate stored URLs before serving the redirect; returns `{ ok: true, url: URL } | { ok: false, error: string }`.
 - **Input requirements**: All mutation endpoints require `Content-Type: application/json`; enforced via `requireJson(request)`.
@@ -104,7 +104,31 @@ For remote (production): replace `--local` with `--remote`.
 - **HTML escaping**: use `escapeHtml(str)` from `src/utils.ts` for any user-supplied content embedded in HTML contexts.
 - **Ownership enforcement**: Update/delete queries include `AND user_id = ?` directly in the `WHERE` clause (atomic, prevents TOCTOU). `result.meta.changes === 0` returns 404 for both "not found" and "wrong owner" — intentionally no distinction to prevent user enumeration.
 - **Async click counting**: `handleRedirect` increments `click_count` via `ctx.waitUntil(...)` (non-blocking, does not delay the 302 response).
-- **Anonymous links**: always get a hard 48 h expiry (`expires_at = now + 48h`); no title or alias; `user_id` stored as `NULL`.
+- **Anonymous links**: always get a hard 48 h expiry (`expires_at = now + 48h`); no title or alias; `user_id` stored as `NULL`. Sending a `tags` field on `POST /api/links/anonymous` is rejected with 400.
+- **Redirect anti-enumeration**: `handleRedirect` returns `404` for not-found, inactive (`is_active = 0`), **and** expired links — never `410`. This prevents short-code enumeration via status-code differences.
+- **CSRF token acquisition**: call `GET /api/me` while authenticated; the `csrfToken` field in the JSON response is the value to send as `X-CSRF-Token` on subsequent mutation requests. The token is `HMAC-SHA256(sessionId, SESSION_SECRET)` where `sessionId` is the `__Host-sid` cookie value.
+- **OAuth cookies**: `handleLogin` sets short-lived `oauth_state` and `oauth_nonce` cookies (`Max-Age=600`). After a successful callback, both are cleared and the user is redirected to `/app.html`. `getAllowedOrigins` (in `src/csrf.ts`) dynamically computes allowed origins from both `APP_BASE_URL` and the request's own origin, so CSRF validation works in every environment without extra config.
+- **Config limits**: `TARGET_URL_MAX_LEN = 2000`, `TITLE_MAX_LEN = 200`, `TAG_MAX_PER_LINK = 10`, `TAG_NAME_MAX_LEN = 50`, `SHORT_CODE_GENERATION_RETRIES = 5` — all in `src/config.ts`; never hardcode these.
+
+## Testing
+
+Tests use `@cloudflare/vitest-pool-workers` (Miniflare). Shared utilities live in `test/helpers.ts`:
+
+| Helper | Purpose |
+|--------|---------|
+| `setupTestDb(db)` | Creates `users` + `sessions` tables |
+| `setupLinksTable(db)` | Creates `links` table and indexes |
+| `setupTagsTables(db)` | Creates `tags` + `link_tags` tables |
+| `setupSpamTable(db)` | Creates `spam_keywords` table with seed keywords |
+| `setupRateLimitTable(db)` | Creates `rate_limits` table |
+| `seedSession(db, opts?)` | Inserts a user + valid session; returns `{ userId, sessionId }` |
+| `seedLink(db, opts)` | Inserts a link row; returns `{ id, shortCode }` |
+| `makeRequest(url, method?, opts?)` | Builds a `Request` with cookies/headers/body |
+| `buildFakeIdToken(payload, headerOverrides?)` | Creates a Base64-only (unsigned) JWT for mocking Google OAuth |
+
+Call `setupTestDb` + `setupLinksTable` + `setupTagsTables` + `setupRateLimitTable` in `beforeAll`. Delete all rows from all tables in `beforeEach` to ensure isolation. Call `_resetSpamKeywordCache()` (from `src/validation.ts`) in `beforeEach` whenever spam-filter tests are involved.
+
+`APP_HTML_CONTENT` is a **test-only** extra binding (injected by `vitest.config.mts` via `readFileSync("./public/app.html")`). It is not present in the production `Env` interface and must not be added to `src/types.ts`.
 
 ## Node.js Compatibility
 

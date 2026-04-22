@@ -90,6 +90,25 @@ describe("/api/me", () => {
 		const data = await res.json<{ authenticated: boolean }>();
 		expect(data.authenticated).toBe(false);
 	});
+
+	it("returns a csrfToken string when authenticated", async () => {
+		const { sessionId } = await seedSession(env.hello_cf_spa_db);
+		const res = await call(
+			makeRequest(`${BASE}/api/me`, "GET", { cookies: { "__Host-sid": sessionId } })
+		);
+		const data = await res.json<{ authenticated: boolean; csrfToken: string | null }>();
+		expect(data.authenticated).toBe(true);
+		expect(typeof data.csrfToken).toBe("string");
+		expect((data.csrfToken as string).length).toBeGreaterThan(0);
+	});
+
+	it("does not return csrfToken when not authenticated", async () => {
+		const res = await call(makeRequest(`${BASE}/api/me`));
+		const data = await res.json<Record<string, unknown>>();
+		expect(data.authenticated).toBe(false);
+		// csrfToken must not be present (or be null/undefined) for unauthenticated responses
+		expect(data.csrfToken ?? null).toBeNull();
+	});
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1687,6 +1706,48 @@ describe("CSRF protection on POST routes", () => {
 		);
 		expect(res.status).toBe(403);
 	});
+
+	it("allows POST with a valid X-CSRF-Token header instead of X-Requested-With", async () => {
+		const { sessionId } = await seedSession(env.hello_cf_spa_db);
+
+		// Obtain csrfToken from /api/me
+		const meRes = await call(
+			makeRequest(`${BASE}/api/me`, "GET", { cookies: { "__Host-sid": sessionId } })
+		);
+		const { csrfToken } = await meRes.json<{ csrfToken: string }>();
+		expect(typeof csrfToken).toBe("string");
+
+		// Mutation with Origin + X-CSRF-Token, no X-Requested-With
+		const res = await call(
+			makeRequest(`${BASE}/api/links`, "POST", {
+				cookies: { "__Host-sid": sessionId },
+				headers: {
+					"content-type": "application/json",
+					"Origin": env.APP_BASE_URL,
+					"X-CSRF-Token": csrfToken,
+				},
+				body: JSON.stringify({ target_url: "https://csrf-token-allowed.example.com" }),
+			})
+		);
+		expect(res.status).toBe(201);
+	});
+
+	it("returns 403 when an invalid X-CSRF-Token is sent with same-origin header", async () => {
+		const { sessionId } = await seedSession(env.hello_cf_spa_db);
+
+		const res = await call(
+			makeRequest(`${BASE}/api/links`, "POST", {
+				cookies: { "__Host-sid": sessionId },
+				headers: {
+					"content-type": "application/json",
+					"Origin": env.APP_BASE_URL,
+					"X-CSRF-Token": "invalid-token-value",
+				},
+				body: JSON.stringify({ target_url: "https://example.com" }),
+			})
+		);
+		expect(res.status).toBe(403);
+	});
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1773,6 +1834,260 @@ describe("Rate limit on GET /r/:code", () => {
 			})
 		);
 		expect(res.status).toBe(302);
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HEAD /r/:code
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("HEAD /r/:code", () => {
+	it("returns 302 with Location header for a valid short code", async () => {
+		const { userId } = await seedSession(env.hello_cf_spa_db);
+		await seedLink(env.hello_cf_spa_db, {
+			userId,
+			shortCode: "head-test",
+			targetUrl: "https://head-target.example.com",
+		});
+
+		const res = await call(makeRequest(`${BASE}/r/head-test`, "HEAD"));
+		expect(res.status).toBe(302);
+		expect(res.headers.get("location")).toBe("https://head-target.example.com/");
+	});
+
+	it("returns 404 for an unknown short code via HEAD", async () => {
+		const res = await call(makeRequest(`${BASE}/r/no-such-code`, "HEAD"));
+		expect(res.status).toBe(404);
+	});
+
+	it("returns 404 for an inactive link via HEAD", async () => {
+		const { userId } = await seedSession(env.hello_cf_spa_db);
+		await seedLink(env.hello_cf_spa_db, { userId, shortCode: "head-inactive", isActive: 0 });
+		const res = await call(makeRequest(`${BASE}/r/head-inactive`, "HEAD"));
+		expect(res.status).toBe(404);
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/links/:code/update – alias change
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("POST /api/links/:code/update – alias change", () => {
+	it("updates the alias (short_code) and returns the new short_code", async () => {
+		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
+		await seedLink(env.hello_cf_spa_db, { userId, shortCode: "old-alias-1" });
+
+		const res = await call(
+			makeRequest(`${BASE}/api/links/old-alias-1/update`, "POST", {
+				cookies: { "__Host-sid": sessionId },
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ alias: "new-alias-1" }),
+			})
+		);
+		expect(res.status).toBe(200);
+		const data = await res.json<{ short_code: string }>();
+		expect(data.short_code).toBe("new-alias-1");
+	});
+
+	it("new alias is reachable via redirect after update", async () => {
+		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
+		await seedLink(env.hello_cf_spa_db, {
+			userId,
+			shortCode: "pre-rename",
+			targetUrl: "https://renamed-target.example.com",
+		});
+
+		await call(
+			makeRequest(`${BASE}/api/links/pre-rename/update`, "POST", {
+				cookies: { "__Host-sid": sessionId },
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ alias: "post-rename" }),
+			})
+		);
+
+		const redir = await call(makeRequest(`${BASE}/r/post-rename`));
+		expect(redir.status).toBe(302);
+		expect(redir.headers.get("location")).toBe("https://renamed-target.example.com/");
+	});
+
+	it("old alias returns 404 after rename", async () => {
+		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
+		await seedLink(env.hello_cf_spa_db, { userId, shortCode: "before-rename" });
+
+		await call(
+			makeRequest(`${BASE}/api/links/before-rename/update`, "POST", {
+				cookies: { "__Host-sid": sessionId },
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ alias: "after-rename" }),
+			})
+		);
+
+		const old = await call(makeRequest(`${BASE}/r/before-rename`));
+		expect(old.status).toBe(404);
+	});
+
+	it("returns 409 when the new alias is already taken by another link", async () => {
+		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
+		await seedLink(env.hello_cf_spa_db, { userId, shortCode: "alias-taken" });
+		await seedLink(env.hello_cf_spa_db, { userId, shortCode: "alias-changer" });
+
+		const res = await call(
+			makeRequest(`${BASE}/api/links/alias-changer/update`, "POST", {
+				cookies: { "__Host-sid": sessionId },
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ alias: "alias-taken" }),
+			})
+		);
+		expect(res.status).toBe(409);
+	});
+
+	it("returns 400 when the new alias is a reserved word", async () => {
+		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
+		await seedLink(env.hello_cf_spa_db, { userId, shortCode: "renaming-this" });
+
+		const res = await call(
+			makeRequest(`${BASE}/api/links/renaming-this/update`, "POST", {
+				cookies: { "__Host-sid": sessionId },
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ alias: "api" }),
+			})
+		);
+		expect(res.status).toBe(400);
+	});
+
+	it("normalises Unicode dashes in the new alias", async () => {
+		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
+		await seedLink(env.hello_cf_spa_db, { userId, shortCode: "unicode-src" });
+
+		// U+2014 EM DASH should be replaced with ASCII hyphen
+		const res = await call(
+			makeRequest(`${BASE}/api/links/unicode-src/update`, "POST", {
+				cookies: { "__Host-sid": sessionId },
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ alias: "new\u2014alias" }),
+			})
+		);
+		expect(res.status).toBe(200);
+		const data = await res.json<{ short_code: string }>();
+		expect(data.short_code).toBe("new-alias");
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/links – tags included in response
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("GET /api/links – tags in response", () => {
+	it("returns an empty tags array for links without tags", async () => {
+		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
+		await seedLink(env.hello_cf_spa_db, { userId, shortCode: "notags1" });
+
+		const res = await call(
+			makeRequest(`${BASE}/api/links`, "GET", { cookies: { "__Host-sid": sessionId } })
+		);
+		const data = await res.json<{ links: { tags: unknown[] }[] }>();
+		expect(data.links[0].tags).toEqual([]);
+	});
+
+	it("returns the tags array sorted alphabetically for a tagged link", async () => {
+		const { sessionId } = await seedSession(env.hello_cf_spa_db);
+
+		// Create a link with tags via the API
+		const createRes = await call(
+			makeRequest(`${BASE}/api/links`, "POST", {
+				cookies: { "__Host-sid": sessionId },
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					target_url: "https://tagged.example.com",
+					tags: ["zebra", "alpha", "mango"],
+				}),
+			})
+		);
+		expect(createRes.status).toBe(201);
+
+		const listRes = await call(
+			makeRequest(`${BASE}/api/links`, "GET", { cookies: { "__Host-sid": sessionId } })
+		);
+		const data = await listRes.json<{ links: { tags: string[] }[] }>();
+		expect(data.links[0].tags).toEqual(["alpha", "mango", "zebra"]);
+	});
+
+	it("tags are user-scoped: user B cannot see user A's tags in the list", async () => {
+		const userA = await seedSession(env.hello_cf_spa_db, {
+			userId: "tag-scope-a",
+			email: "tag-a@example.com",
+			googleSub: "tag-scope-sub-a",
+		});
+		const userB = await seedSession(env.hello_cf_spa_db, {
+			userId: "tag-scope-b",
+			email: "tag-b@example.com",
+			googleSub: "tag-scope-sub-b",
+		});
+
+		await call(
+			makeRequest(`${BASE}/api/links`, "POST", {
+				cookies: { "__Host-sid": userA.sessionId },
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ target_url: "https://a.example.com", tags: ["secret-a"] }),
+			})
+		);
+
+		await call(
+			makeRequest(`${BASE}/api/links`, "POST", {
+				cookies: { "__Host-sid": userB.sessionId },
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ target_url: "https://b.example.com", tags: ["secret-b"] }),
+			})
+		);
+
+		const listB = await call(
+			makeRequest(`${BASE}/api/links`, "GET", { cookies: { "__Host-sid": userB.sessionId } })
+		);
+		const data = await listB.json<{ links: { tags: string[] }[] }>();
+		expect(data.links).toHaveLength(1);
+		expect(data.links[0].tags).toEqual(["secret-b"]);
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/links – SSRF protection (authenticated endpoint)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("POST /api/links – SSRF protection", () => {
+	it("returns 400 for a localhost URL", async () => {
+		const { sessionId } = await seedSession(env.hello_cf_spa_db);
+		const res = await call(
+			makeRequest(`${BASE}/api/links`, "POST", {
+				cookies: { "__Host-sid": sessionId },
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ target_url: "http://localhost/admin" }),
+			})
+		);
+		expect(res.status).toBe(400);
+	});
+
+	it("returns 400 for a 169.254.x.x AWS metadata URL", async () => {
+		const { sessionId } = await seedSession(env.hello_cf_spa_db);
+		const res = await call(
+			makeRequest(`${BASE}/api/links`, "POST", {
+				cookies: { "__Host-sid": sessionId },
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ target_url: "http://169.254.169.254/latest/meta-data/" }),
+			})
+		);
+		expect(res.status).toBe(400);
+	});
+
+	it("returns 400 for a private 10.x IP", async () => {
+		const { sessionId } = await seedSession(env.hello_cf_spa_db);
+		const res = await call(
+			makeRequest(`${BASE}/api/links`, "POST", {
+				cookies: { "__Host-sid": sessionId },
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ target_url: "http://10.0.0.1/internal" }),
+			})
+		);
+		expect(res.status).toBe(400);
 	});
 });
 
