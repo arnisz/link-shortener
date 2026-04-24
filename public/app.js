@@ -640,8 +640,9 @@ async function loadLinks() {
 	_isFetching = false;
 	const list     = document.getElementById("links-list");
 	const statusEl = document.getElementById("links-status");
+	const spinner  = document.getElementById("links-spinner");
 	if (statusEl) { statusEl.textContent = ""; statusEl.className = ""; }
-
+  if (spinner) spinner.hidden = false;
 	list.innerHTML = "";
 	const loading = document.createElement("em");
 	loading.textContent = translate("app.links.loading");
@@ -683,6 +684,8 @@ async function loadLinks() {
 				? err.message
 				: translate("app.links.load.error");
 		}
+	} finally {
+		if (spinner) spinner.hidden = true;
 	}
 }
 
