@@ -99,8 +99,8 @@ For remote (production): replace `--local` with `--remote`.
 - **Short codes**: 6-char alphanumeric, bias-free generation in `generateShortCode` (`src/validation.ts`).
 - **Hashtags**: Authenticated users can assign up to 10 tags per link (limit `TAG_MAX_PER_LINK`). Tags are normalized (NFKC, lowercase, leading # removed, trim), 1–50 chars, starting with alphanumeric `[a-z0-9][a-z0-9_-]*`. Tags are validated via `validateTag(raw)` in `src/validation.ts`. Tags are strictly user-scoped; orphaned tags are garbage collected after each mutation (`UPDATE`, `DELETE`). **Tag updates are full-replace**: sending `tags: []` removes all tags; sending `tags: ["foo"]` replaces all existing tags with `["foo"]`. D1 tag operations use **two-phase batching** because junction-table inserts (`link_tags`) need the AUTOINCREMENT `tag_id` — first batch inserts into `tags`, second batch inserts into `link_tags` using a `SELECT … WHERE name = ?` subquery.
 - **Search**: `GET /api/links?q=<term>` searches via case-insensitive substring in alias, title, and tag names. Term is trimmed and capped at 100 chars. Case-insensitivity is ensured via `LOWER()` in SQL.
-- **Alias reserved words**: `["api", "login", "logout", "app", "r"]` — checked in `ALIAS_RESERVED`.
-- **Logging**: use `log(category, message)` from `src/utils.ts`; it wraps `console.log` with `[category]` prefix.
+- **Alias reserved words**: `["api", "login", "logout", "app", "r", "stats"]` — checked in `ALIAS_RESERVED` (`src/validation.ts`). `stats` is reserved to avoid collision with the external stats/paywall worker route.
+- **Logging**: use `log(category, message)` from `src/utils.ts`; it wraps `console.log` with `[category]` prefix. **Security constraints**: never log full cookie values, session IDs, OAuth tokens, or `SESSION_SECRET` — at most log the first 8 characters of a session ID for correlation (e.g. `sid=4fc38ab5…`). On auth-related rejections, always include a short `reason` string (e.g. `session_not_found`, `expired`, `csrf_mismatch`) so Tail Logs are interpretable without consulting source code.
 - **HTML escaping**: use `escapeHtml(str)` from `src/utils.ts` for any user-supplied content embedded in HTML contexts.
 - **Ownership enforcement**: Update/delete queries include `AND user_id = ?` directly in the `WHERE` clause (atomic, prevents TOCTOU). `result.meta.changes === 0` returns 404 for both "not found" and "wrong owner" — intentionally no distinction to prevent user enumeration.
 - **Async click counting**: `handleRedirect` increments `click_count` via `ctx.waitUntil(...)` (non-blocking, does not delay the 302 response).
@@ -109,6 +109,33 @@ For remote (production): replace `--local` with `--remote`.
 - **CSRF token acquisition**: call `GET /api/me` while authenticated; the `csrfToken` field in the JSON response is the value to send as `X-CSRF-Token` on subsequent mutation requests. The token is `HMAC-SHA256(sessionId, SESSION_SECRET)` where `sessionId` is the `__Host-sid` cookie value.
 - **OAuth cookies**: `handleLogin` sets short-lived `oauth_state` and `oauth_nonce` cookies (`Max-Age=600`). After a successful callback, both are cleared and the user is redirected to `/app.html`. `getAllowedOrigins` (in `src/csrf.ts`) dynamically computes allowed origins from both `APP_BASE_URL` and the request's own origin, so CSRF validation works in every environment without extra config.
 - **Config limits**: `TARGET_URL_MAX_LEN = 2000`, `TITLE_MAX_LEN = 200`, `TAG_MAX_PER_LINK = 10`, `TAG_NAME_MAX_LEN = 50`, `SHORT_CODE_GENERATION_RETRIES = 5` — all in `src/config.ts`; never hardcode these.
+
+## Data Format Contracts
+
+The following fields are stored in D1 and may be consumed by external workers. **These formats are contractual** — changes are breaking.
+
+| Field | Type / Regex | Generator in code | Example |
+|-------|-------------|-------------------|---------|
+| `users.id` | 32-char lowercase hex, no dashes — `/^[0-9a-f]{32}$/` | `randomId(16)` in `src/utils.ts` | `e1fe7f45be35276067ab8118d4e2f257` |
+| `sessions.id` | 48-char lowercase hex, no dashes — `/^[0-9a-f]{48}$/` | `randomId(24)` in `src/utils.ts` | `4fc38ab5e1d209ca3e16440648410a54b8dffddf1cbcec37` |
+| `sessions.user_id` | Foreign key → same format as `users.id` | — | see above |
+| `sessions.expires_at` | ISO-8601 with milliseconds + `Z` suffix — **not** a Unix timestamp, **not** SQLite `datetime()` | `new Date(Date.now() + SESSION_DURATION_MS).toISOString()` | `2026-05-29T15:51:47.452Z` |
+| `sessions.created_at` | Same ISO-8601 format as `expires_at` | `new Date().toISOString()` | `2026-04-29T18:33:00.123Z` |
+| `links.id` | 6-char alphanumeric (`[a-zA-Z0-9]{6}`) — also used as `short_code` | `generateShortCode()` in `src/validation.ts` | `aB3xY9` |
+| `links.user_id` | Foreign key → same format as `users.id`, or `NULL` for anonymous links | — | see above |
+| `links.created_at` / `links.updated_at` / `links.expires_at` | ISO-8601 same as sessions; `expires_at` is `NULL` for authenticated non-expiring links | `new Date().toISOString()` | `2026-04-29T18:33:00.123Z` |
+| `__Host-sid` cookie | Identical to `sessions.id` — 48-char lowercase hex | `randomId(24)` | `4fc38ab5e1d209ca3e16440648410a54b8dffddf1cbcec37` |
+
+**Consumers must parse timestamps** with `new Date(expires_at) > new Date()` — not integer comparison.
+
+## Shared Database Consumers
+
+This D1 database is also read by an external stats/paywall worker. Schema changes to `users`, `sessions`, or format changes to any field listed in **Data Format Contracts** above are **breaking changes** for external consumers and must be versioned and coordinated. In particular:
+
+- Cookie name `__Host-sid` is part of the contract.
+- Format of `users.id` and `sessions.id` (32- and 48-char hex) is part of the contract.
+- `SESSION_SECRET` is the shared secret if external workers want to validate CSRF tokens (`HMAC-SHA256(sessionId, SESSION_SECRET)`).
+- Never rename or reorder columns in `users` or `sessions` without coordinating with all consumers.
 
 ## Testing
 

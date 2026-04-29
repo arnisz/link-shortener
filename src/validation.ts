@@ -2,7 +2,7 @@ import { SHORT_CODE_LENGTH, SHORT_CODE_CHARS, TAG_NAME_MAX_LEN } from "./config"
 import { log } from "./utils";
 
 export const ALIAS_REGEX = /^[a-zA-Z0-9_-]{3,50}$/;
-export const ALIAS_RESERVED = new Set(["api", "login", "logout", "app", "r"]);
+export const ALIAS_RESERVED = new Set(["api", "login", "logout", "app", "r", "stats"]);
 
 /** NFKC-normalise a raw alias, replace Unicode dashes with ASCII hyphen, and trim whitespace. */
 export function normalizeAlias(raw: string): string {

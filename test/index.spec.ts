@@ -930,6 +930,18 @@ describe("POST /api/links – Phase 2", () => {
 		expect(res.status).toBe(400);
 	});
 
+	it("returns 400 for the reserved alias 'stats'", async () => {
+		const { sessionId } = await seedSession(env.hello_cf_spa_db);
+		const res = await call(
+			makeRequest(`${BASE}/api/links`, "POST", {
+				cookies: { "__Host-sid": sessionId },
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ target_url: "https://example.com", alias: "stats" }),
+			})
+		);
+		expect(res.status).toBe(400);
+	});
+
 	it("returns 400 when alias is too short (< 3 chars)", async () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
