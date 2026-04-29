@@ -1,11 +1,11 @@
 import type { Env } from "../types";
 import { TARGET_URL_MAX_LEN, TITLE_MAX_LEN, SHORT_CODE_GENERATION_RETRIES, TAG_MAX_PER_LINK } from "../config";
 import { randomId, jsonResponse, errResponse, log } from "../utils";
-import { validateAlias, normalizeAlias, isValidFutureIso, requireJson, generateShortCode, checkSpamFilter, validateTargetUrl, validateTag } from "../validation";
+import { generateUniqueShortCode, validateAlias, normalizeAlias, isValidFutureIso, requireJson, generateShortCode, checkSpamFilter, validateTargetUrl, validateTag } from "../validation";
 import { checkRateLimit } from "../rateLimit";
 import { getSessionUser } from "../auth/session";
 import { validateCsrfToken, validateMutationCsrf } from "../csrf";
-import { getCookie } from "../utils";
+import { getCookie, sanitizeReferrer } from "../utils";
 
 // ---------------------------------------------------------------------------
 // Private helpers
@@ -611,9 +611,9 @@ export async function handleRedirect(code: string, env: Env, ctx: ExecutionConte
 	}
 
 	const link = await env.hello_cf_spa_db
-		.prepare("SELECT id, target_url, is_active, expires_at FROM links WHERE short_code = ?")
+		.prepare("SELECT id, user_id, target_url, is_active, expires_at FROM links WHERE short_code = ?")
 		.bind(code)
-		.first<{ id: string; target_url: string; is_active: number; expires_at: string | null }>();
+		.first<{ id: string; user_id: string | null; target_url: string; is_active: number; expires_at: string | null }>();
 
 	if (!link) {
 		log("REDIRECT", `Not found: code="${code}"`);
@@ -642,12 +642,35 @@ export async function handleRedirect(code: string, env: Env, ctx: ExecutionConte
 
 	const destination = validation.url.href;
 
-	ctx.waitUntil(
-		env.hello_cf_spa_db
-			.prepare("UPDATE links SET click_count = click_count + 1, updated_at = ? WHERE id = ?")
-			.bind(new Date().toISOString(), link.id)
-			.run()
-	);
+	const ts = Math.floor(Date.now() / 1000);
+	const country = (request.cf?.country as string) || null;
+	const asn = (request.cf?.asn as number) || null;
+	const asnOrg = (request.cf?.asOrganization as string) || null;
+	const referrerHost = sanitizeReferrer(request.headers.get("Referer"));
+
+	ctx.waitUntil((async () => {
+		try {
+			await env.hello_cf_spa_db
+				.prepare("UPDATE links SET click_count = click_count + 1, updated_at = ? WHERE id = ?")
+				.bind(new Date().toISOString(), link.id)
+				.run();
+		} catch (e) {
+			log("REDIRECT_ERR", `Failed to update click count for link ${link.id}: ${e}`);
+		}
+	})());
+
+	ctx.waitUntil((async () => {
+		try {
+			await env.hello_cf_spa_db
+				.prepare(`INSERT INTO clicks (ts, link_id, user_id, country, asn, asn_org, referrer_host) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+				.bind(ts, link.id, link.user_id, country, asn, asnOrg, referrerHost)
+				.run();
+		} catch (e) {
+			log("REDIRECT_ERR", `Failed to insert click log for link ${link.id}: ${e}`);
+		}
+		//temporärer log arni 26.04.2026
+		log("ANALYTICS_TEST", JSON.stringify({ ts, country, asn, asnOrg, referrerHost }));
+	})());
 
 	return new Response(null, { status: 302, headers: { Location: destination } });
 }

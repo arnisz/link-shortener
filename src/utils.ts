@@ -1,3 +1,5 @@
+import { getDomain } from "tldts";
+
 export function base64UrlDecode(input: string): string {
 	input = input.replace(/-/g, "+").replace(/_/g, "/");
 	const pad = input.length % 4;
@@ -124,4 +126,30 @@ export function applySecurityHeaders(response: Response): Response {
 		statusText: response.statusText,
 		headers
 	});
+}
+
+/**
+ * Extracts and sanitizes the eTLD+1 domain from a referrer URL to ensure GDPR compliance.
+ * We never store full URLs, full subdomains, paths or query parameters.
+ * Throws away internal, local IPs or the app domain itself (aadd.li).
+ */
+export function sanitizeReferrer(raw: string | null): string | null {
+	if (!raw) return null;
+	try {
+		const url = new URL(raw);
+		if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+
+		// Exclude our own app domains or localhosts
+		if (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "aadd.li") {
+			return null;
+		}
+
+		// getDomain returns e.g. "kunde.com" from "projekt.kunde.com"
+		// allowPrivateDomains: false makes sure we get a valid public suffix
+		const domain = getDomain(url.hostname, { allowPrivateDomains: false });
+
+		return domain || null;
+	} catch {
+		return null; // invalid URL
+	}
 }
