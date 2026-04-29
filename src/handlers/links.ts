@@ -1,7 +1,7 @@
 import type { Env } from "../types";
 import { TARGET_URL_MAX_LEN, TITLE_MAX_LEN, SHORT_CODE_GENERATION_RETRIES, TAG_MAX_PER_LINK } from "../config";
 import { randomId, jsonResponse, errResponse, log } from "../utils";
-import { generateUniqueShortCode, validateAlias, normalizeAlias, isValidFutureIso, requireJson, generateShortCode, checkSpamFilter, validateTargetUrl, validateTag } from "../validation";
+import { generateShortCode, validateAlias, normalizeAlias, isValidFutureIso, requireJson, checkSpamFilter, validateTargetUrl, validateTag } from "../validation";
 import { checkRateLimit } from "../rateLimit";
 import { getSessionUser } from "../auth/session";
 import { validateCsrfToken, validateMutationCsrf } from "../csrf";
