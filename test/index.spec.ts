@@ -241,6 +241,14 @@ describe("GET /api/auth/google/callback", () => {
 
 	// ── Happy path: mocked Google token exchange ────────────────────────────
 
+	/**
+	 * Helper: build the base64 JSON state that handleLogin would produce,
+	 * given a nonce string and an optional next path.
+	 */
+	function buildState(nonce: string, next: string = "/"): string {
+		return btoa(JSON.stringify({ nonce, next }));
+	}
+
 	it("creates a session and redirects to /app.html on a valid exchange", async () => {
 		// Build an id_token whose aud and nonce match the test bindings / cookie
 		const idToken = buildFakeIdToken({
@@ -466,6 +474,164 @@ describe("GET /api/auth/google/callback", () => {
 			)
 		);
 		expect(res.status).toBe(400);
+	});
+
+	// ── Dynamic redirect via next in state ─────────────────────────────────
+
+	it("redirects to the next path encoded in the state after a successful login", async () => {
+		const nonce = "testnonce123";
+		const state = buildState(nonce, "/stats/");
+		const idToken = buildFakeIdToken({
+			iss: "https://accounts.google.com",
+			aud: env.GOOGLE_CLIENT_ID,
+			sub: "google-sub-next-redirect",
+			email: "next-redirect@example.com",
+			email_verified: true,
+			name: "Next Redirect User",
+			nonce,
+			exp: Math.floor(Date.now() / 1000) + 3600,
+			iat: Math.floor(Date.now() / 1000),
+		});
+
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+			if (url === "https://oauth2.googleapis.com/token") {
+				return new Response(
+					JSON.stringify({ id_token: idToken, access_token: "fake-access-token" }),
+					{ status: 200, headers: { "content-type": "application/json" } }
+				);
+			}
+			if (url === "https://www.googleapis.com/oauth2/v3/certs") {
+				return new Response(
+					JSON.stringify({ keys: [{ kid: "test-kid", n: "unused", e: "unused", kty: "RSA", alg: "RS256", use: "sig" }] }),
+					{ status: 200, headers: { "content-type": "application/json" } }
+				);
+			}
+			return new Response("Not found", { status: 404 });
+		});
+		vi.spyOn(crypto.subtle, "importKey").mockResolvedValue({} as any);
+		vi.spyOn(crypto.subtle, "verify").mockResolvedValue(true);
+
+		const res = await call(
+			makeRequest(
+				`${BASE}/api/auth/google/callback?code=auth-code-next&state=${encodeURIComponent(state)}`,
+				"GET",
+				{ cookies: { oauth_state: state, oauth_nonce: nonce } }
+			)
+		);
+
+		expect(res.status).toBe(302);
+		expect(res.headers.get("location")).toBe("/stats/");
+	});
+
+	it("falls back to /app.html when next in state is an absolute URL (open-redirect protection)", async () => {
+		const nonce = "testnonce456";
+		const state = btoa(JSON.stringify({ nonce, next: "https://evil.com" }));
+		const idToken = buildFakeIdToken({
+			iss: "https://accounts.google.com",
+			aud: env.GOOGLE_CLIENT_ID,
+			sub: "google-sub-openredirect",
+			email: "openredirect@example.com",
+			email_verified: true,
+			name: "Evil Redirect User",
+			nonce,
+			exp: Math.floor(Date.now() / 1000) + 3600,
+			iat: Math.floor(Date.now() / 1000),
+		});
+
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+			if (url === "https://oauth2.googleapis.com/token") {
+				return new Response(
+					JSON.stringify({ id_token: idToken, access_token: "fake-access-token" }),
+					{ status: 200, headers: { "content-type": "application/json" } }
+				);
+			}
+			if (url === "https://www.googleapis.com/oauth2/v3/certs") {
+				return new Response(
+					JSON.stringify({ keys: [{ kid: "test-kid", n: "unused", e: "unused", kty: "RSA", alg: "RS256", use: "sig" }] }),
+					{ status: 200, headers: { "content-type": "application/json" } }
+				);
+			}
+			return new Response("Not found", { status: 404 });
+		});
+		vi.spyOn(crypto.subtle, "importKey").mockResolvedValue({} as any);
+		vi.spyOn(crypto.subtle, "verify").mockResolvedValue(true);
+
+		const res = await call(
+			makeRequest(
+				`${BASE}/api/auth/google/callback?code=auth-code-evil&state=${encodeURIComponent(state)}`,
+				"GET",
+				{ cookies: { oauth_state: state, oauth_nonce: nonce } }
+			)
+		);
+
+		expect(res.status).toBe(302);
+		expect(res.headers.get("location")).toBe("/app.html");
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /login – dynamic redirect via ?next=
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("GET /login – dynamic redirect", () => {
+	it("sets oauth_state cookie as base64 JSON with default next=/", async () => {
+		const res = await call(
+			makeRequest(`${BASE}/login`, "GET", {
+				headers: { "CF-Connecting-IP": "1.2.3.4" },
+			})
+		);
+		expect(res.status).toBe(302);
+		const cookies = res.headers.getAll("set-cookie");
+		const stateCookie = cookies.find(c => c.startsWith("oauth_state="));
+		expect(stateCookie).toBeDefined();
+		const stateValue = stateCookie!.split(";")[0].split("=").slice(1).join("=");
+		const payload = JSON.parse(atob(stateValue));
+		expect(typeof payload.nonce).toBe("string");
+		expect(payload.next).toBe("/");
+	});
+
+	it("encodes a valid ?next= relative path in the state", async () => {
+		const res = await call(
+			makeRequest(`${BASE}/login?next=/stats/`, "GET", {
+				headers: { "CF-Connecting-IP": "1.2.3.5" },
+			})
+		);
+		expect(res.status).toBe(302);
+		const cookies = res.headers.getAll("set-cookie");
+		const stateCookie = cookies.find(c => c.startsWith("oauth_state="));
+		const stateValue = stateCookie!.split(";")[0].split("=").slice(1).join("=");
+		const payload = JSON.parse(atob(stateValue));
+		expect(payload.next).toBe("/stats/");
+	});
+
+	it("falls back to next=/ when ?next= is an absolute URL (open-redirect protection)", async () => {
+		const res = await call(
+			makeRequest(`${BASE}/login?next=https://evil.com`, "GET", {
+				headers: { "CF-Connecting-IP": "1.2.3.6" },
+			})
+		);
+		expect(res.status).toBe(302);
+		const cookies = res.headers.getAll("set-cookie");
+		const stateCookie = cookies.find(c => c.startsWith("oauth_state="));
+		const stateValue = stateCookie!.split(";")[0].split("=").slice(1).join("=");
+		const payload = JSON.parse(atob(stateValue));
+		expect(payload.next).toBe("/");
+	});
+
+	it("state in Google URL matches the oauth_state cookie value", async () => {
+		const res = await call(
+			makeRequest(`${BASE}/login?next=/dashboard`, "GET", {
+				headers: { "CF-Connecting-IP": "1.2.3.7" },
+			})
+		);
+		expect(res.status).toBe(302);
+		const location = res.headers.get("location")!;
+		const googleUrl = new URL(location);
+		const stateInUrl = googleUrl.searchParams.get("state")!;
+		const cookies = res.headers.getAll("set-cookie");
+		const stateCookie = cookies.find(c => c.startsWith("oauth_state="));
+		const stateInCookie = stateCookie!.split(";")[0].split("=").slice(1).join("=");
+		expect(stateInUrl).toBe(stateInCookie);
 	});
 });
 

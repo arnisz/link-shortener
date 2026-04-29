@@ -49,14 +49,18 @@ export async function handleLogin(request: Request, env: Env): Promise<Response>
 		return errResponse("Too many requests", 429);
 	}
 
+	// Read optional ?next= param; only accept relative paths (must start with /)
+	const loginUrl = new URL(request.url);
+	const rawNext = loginUrl.searchParams.get("next") ?? "";
+	const next = rawNext.startsWith("/") ? rawNext : "/";
+
 	// Generate CSRF state + replay-prevention nonce
 	const arr = new Uint8Array(16);
 	crypto.getRandomValues(arr);
-	const state = [...arr].map(b => b.toString(16).padStart(2, "0")).join("");
+	const nonce = [...arr].map(b => b.toString(16).padStart(2, "0")).join("");
 
-	const arr2 = new Uint8Array(16);
-	crypto.getRandomValues(arr2);
-	const nonce = [...arr2].map(b => b.toString(16).padStart(2, "0")).join("");
+	// Encode state as base64 JSON containing the random nonce and the next path
+	const statePayload = btoa(JSON.stringify({ nonce, next }));
 
 	const cookieOpts = `Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${OAUTH_COOKIE_MAX_AGE_SECONDS}`;
 	const redirectUri = `${env.APP_BASE_URL}/api/auth/google/callback`;
@@ -66,13 +70,13 @@ export async function handleLogin(request: Request, env: Env): Promise<Response>
 	googleUrl.searchParams.set("redirect_uri", redirectUri);
 	googleUrl.searchParams.set("response_type", "code");
 	googleUrl.searchParams.set("scope", "openid email profile");
-	googleUrl.searchParams.set("state", state);
+	googleUrl.searchParams.set("state", statePayload);
 	googleUrl.searchParams.set("nonce", nonce);
 	googleUrl.searchParams.set("prompt", "select_account");
 
 	const headers = new Headers();
 	headers.set("Location", googleUrl.toString());
-	headers.append("Set-Cookie", `oauth_state=${state}; ${cookieOpts}`);
+	headers.append("Set-Cookie", `oauth_state=${statePayload}; ${cookieOpts}`);
 	headers.append("Set-Cookie", `oauth_nonce=${nonce}; ${cookieOpts}`);
 
 	return new Response(null, { status: 302, headers });
@@ -175,6 +179,18 @@ async function processGoogleCallback(
 	return { success: true, userId, sessionId };
 }
 
+/** Decode the base64 JSON state payload and extract the `next` path (validated). */
+function extractNextFromState(state: string | null): string {
+	if (!state) return "/app.html";
+	try {
+		const parsed = JSON.parse(atob(state)) as Record<string, unknown>;
+		const next = typeof parsed.next === "string" && parsed.next.startsWith("/") ? parsed.next : "/app.html";
+		return next;
+	} catch {
+		return "/app.html";
+	}
+}
+
 /** GET /api/auth/google/callback – full OAuth callback flow. */
 export async function handleGoogleCallback(request: Request, env: Env): Promise<Response> {
 	const url = new URL(request.url);
@@ -192,8 +208,10 @@ export async function handleGoogleCallback(request: Request, env: Env): Promise<
 	const callbackProcessing = await processGoogleCallback(tokenExchange.idToken, cookieNonce!, env);
 	if (!callbackProcessing.success) return callbackProcessing.response;
 
+	const redirectTarget = extractNextFromState(state);
+
 	const headers = new Headers();
-	headers.set("Location", "/app.html");
+	headers.set("Location", redirectTarget);
 	headers.append("Set-Cookie", makeSessionCookie(callbackProcessing.sessionId, SESSION_COOKIE_MAX_AGE_SECONDS));
 	headers.append("Set-Cookie", `oauth_state=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
 	headers.append("Set-Cookie", `oauth_nonce=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
