@@ -1,5 +1,19 @@
 # Status Log
 
+## 2026-04-30
+
+### Security: OAuth Open Redirect & Cookie Prefix Fixes
+
+**Fix 1 — Open Redirect via Protocol-Relative `next` (HIGH)**
+- `src/handlers/auth.ts`: `handleLogin` und `extractNextFromState` — `next`-Validierung von `startsWith("/")` auf `startsWith("/") && !startsWith("//")` verschärft. Verhindert Redirect auf `//evil.com`.
+
+**Fix 2 — OAuth Cookies mit `__Host-` Präfix (HIGH)**
+- `src/handlers/auth.ts`: `oauth_state` → `__Host-oauth_state`, `oauth_nonce` → `__Host-oauth_nonce` beim Setzen (Z. 79–80), Lesen (Z. 199–200) und Löschen (Z. 216–217). `__Host-`-Präfix erzwingt `Secure; Path=/; kein Domain`-Attribut und verhindert Subdomain-Overwrite-Angriffe.
+
+**Tests**
+- `test/index.spec.ts`: Alle Vorkommen der Cookie-Keys auf `__Host-oauth_state`/`__Host-oauth_nonce` aktualisiert. Neuer Test `falls back to next=/ for protocol-relative URL //evil.com` im `GET /login – dynamic redirect`-Block hinzugefügt.
+- Alle **316 Tests** grün.
+
 ## 2026-04-29
 
 ### Dynamic OAuth Redirect (`?next=`)

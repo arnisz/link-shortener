@@ -52,7 +52,7 @@ export async function handleLogin(request: Request, env: Env): Promise<Response>
 	// Read optional ?next= param; only accept relative paths (must start with /)
 	const loginUrl = new URL(request.url);
 	const rawNext = loginUrl.searchParams.get("next") ?? "";
-	const next = rawNext.startsWith("/") ? rawNext : "/";
+	const next = rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/";
 
 	// Generate CSRF state + replay-prevention nonce
 	const arr = new Uint8Array(16);
@@ -76,8 +76,8 @@ export async function handleLogin(request: Request, env: Env): Promise<Response>
 
 	const headers = new Headers();
 	headers.set("Location", googleUrl.toString());
-	headers.append("Set-Cookie", `oauth_state=${statePayload}; ${cookieOpts}`);
-	headers.append("Set-Cookie", `oauth_nonce=${nonce}; ${cookieOpts}`);
+	headers.append("Set-Cookie", `__Host-oauth_state=${statePayload}; ${cookieOpts}`);
+	headers.append("Set-Cookie", `__Host-oauth_nonce=${nonce}; ${cookieOpts}`);
 
 	return new Response(null, { status: 302, headers });
 }
@@ -184,7 +184,7 @@ function extractNextFromState(state: string | null): string {
 	if (!state) return "/app.html";
 	try {
 		const parsed = JSON.parse(atob(state)) as Record<string, unknown>;
-		const next = typeof parsed.next === "string" && parsed.next.startsWith("/") ? parsed.next : "/app.html";
+		const next = typeof parsed.next === "string" && parsed.next.startsWith("/") && !parsed.next.startsWith("//") ? parsed.next : "/app.html";
 		return next;
 	} catch {
 		return "/app.html";
@@ -196,8 +196,8 @@ export async function handleGoogleCallback(request: Request, env: Env): Promise<
 	const url = new URL(request.url);
 	const code = url.searchParams.get("code");
 	const state = url.searchParams.get("state");
-	const cookieState = getCookie(request, "oauth_state");
-	const cookieNonce = getCookie(request, "oauth_nonce");
+	const cookieState = getCookie(request, "__Host-oauth_state");
+	const cookieNonce = getCookie(request, "__Host-oauth_nonce");
 
 	const stateValidation = validateOAuthState(code, state, cookieState, cookieNonce);
 	if (!stateValidation.success) return stateValidation.response;
@@ -213,8 +213,8 @@ export async function handleGoogleCallback(request: Request, env: Env): Promise<
 	const headers = new Headers();
 	headers.set("Location", redirectTarget);
 	headers.append("Set-Cookie", makeSessionCookie(callbackProcessing.sessionId, SESSION_COOKIE_MAX_AGE_SECONDS));
-	headers.append("Set-Cookie", `oauth_state=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
-	headers.append("Set-Cookie", `oauth_nonce=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
+	headers.append("Set-Cookie", `__Host-oauth_state=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
+	headers.append("Set-Cookie", `__Host-oauth_nonce=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
 
 	return new Response(null, { status: 302, headers });
 }

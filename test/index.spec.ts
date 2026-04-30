@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Safety-net test suite for the current worker behaviour.
  *
  * Covers:
@@ -200,7 +200,7 @@ describe("GET /api/auth/google/callback", () => {
 	it("returns 400 when the state query param is missing", async () => {
 		const res = await call(
 			makeRequest(`${BASE}/api/auth/google/callback?code=abc`, "GET", {
-				cookies: { oauth_state: "s", oauth_nonce: "n" },
+				cookies: { "__Host-oauth_state": "s", "__Host-oauth_nonce": "n" },
 			})
 		);
 		expect(res.status).toBe(400);
@@ -211,7 +211,7 @@ describe("GET /api/auth/google/callback", () => {
 			makeRequest(
 				`${BASE}/api/auth/google/callback?code=abc&state=WRONG`,
 				"GET",
-				{ cookies: { oauth_state: "correct", oauth_nonce: "n" } }
+				{ cookies: { "__Host-oauth_state": "correct", "__Host-oauth_nonce": "n" } }
 			)
 		);
 		expect(res.status).toBe(400);
@@ -222,7 +222,7 @@ describe("GET /api/auth/google/callback", () => {
 			makeRequest(
 				`${BASE}/api/auth/google/callback?code=abc&state=mystate`,
 				"GET",
-				{ cookies: { oauth_nonce: "n" } } // oauth_state cookie intentionally absent
+				{ cookies: { "__Host-oauth_nonce": "n" } } // oauth_state cookie intentionally absent
 			)
 		);
 		expect(res.status).toBe(400);
@@ -233,7 +233,7 @@ describe("GET /api/auth/google/callback", () => {
 			makeRequest(
 				`${BASE}/api/auth/google/callback?code=abc&state=s`,
 				"GET",
-				{ cookies: { oauth_state: "s" } } // oauth_nonce cookie intentionally absent
+				{ cookies: { "__Host-oauth_state": "s" } } // oauth_nonce cookie intentionally absent
 			)
 		);
 		expect(res.status).toBe(400);
@@ -297,7 +297,7 @@ describe("GET /api/auth/google/callback", () => {
 			makeRequest(
 				`${BASE}/api/auth/google/callback?code=auth-code-123&state=validstate`,
 				"GET",
-				{ cookies: { oauth_state: "validstate", oauth_nonce: "validnonce" } }
+				{ cookies: { "__Host-oauth_state": "validstate", "__Host-oauth_nonce": "validnonce" } }
 			)
 		);
 
@@ -368,7 +368,7 @@ describe("GET /api/auth/google/callback", () => {
 			makeRequest(
 				`${BASE}/api/auth/google/callback?code=auth-code-nonce&state=validstate`,
 				"GET",
-				{ cookies: { oauth_state: "validstate", oauth_nonce: "validnonce" } }
+				{ cookies: { "__Host-oauth_state": "validstate", "__Host-oauth_nonce": "validnonce" } }
 			)
 		);
 		expect(res.status).toBe(400);
@@ -418,7 +418,7 @@ describe("GET /api/auth/google/callback", () => {
 			makeRequest(
 				`${BASE}/api/auth/google/callback?code=abc&state=s`,
 				"GET",
-				{ cookies: { oauth_state: "s", oauth_nonce: "validnonce" } }
+				{ cookies: { "__Host-oauth_state": "s", "__Host-oauth_nonce": "validnonce" } }
 			)
 		);
 		expect(res.status).toBe(400);
@@ -444,7 +444,7 @@ describe("GET /api/auth/google/callback", () => {
 			makeRequest(
 				`${BASE}/api/auth/google/callback?code=abc&state=s`,
 				"GET",
-				{ cookies: { oauth_state: "s", oauth_nonce: "validnonce" } }
+				{ cookies: { "__Host-oauth_state": "s", "__Host-oauth_nonce": "validnonce" } }
 			)
 		);
 		expect(res.status).toBe(400);
@@ -470,7 +470,7 @@ describe("GET /api/auth/google/callback", () => {
 			makeRequest(
 				`${BASE}/api/auth/google/callback?code=abc&state=s`,
 				"GET",
-				{ cookies: { oauth_state: "s", oauth_nonce: "validnonce" } }
+				{ cookies: { "__Host-oauth_state": "s", "__Host-oauth_nonce": "validnonce" } }
 			)
 		);
 		expect(res.status).toBe(400);
@@ -515,9 +515,9 @@ describe("GET /api/auth/google/callback", () => {
 			makeRequest(
 				`${BASE}/api/auth/google/callback?code=auth-code-next&state=${encodeURIComponent(state)}`,
 				"GET",
-				{ cookies: { oauth_state: state, oauth_nonce: nonce } }
-			)
-		);
+			{ cookies: { "__Host-oauth_state": state, "__Host-oauth_nonce": nonce } }
+		)
+	);
 
 		expect(res.status).toBe(302);
 		expect(res.headers.get("location")).toBe("/stats/");
@@ -560,9 +560,9 @@ describe("GET /api/auth/google/callback", () => {
 			makeRequest(
 				`${BASE}/api/auth/google/callback?code=auth-code-evil&state=${encodeURIComponent(state)}`,
 				"GET",
-				{ cookies: { oauth_state: state, oauth_nonce: nonce } }
-			)
-		);
+			{ cookies: { "__Host-oauth_state": state, "__Host-oauth_nonce": nonce } }
+		)
+	);
 
 		expect(res.status).toBe(302);
 		expect(res.headers.get("location")).toBe("/app.html");
@@ -574,7 +574,7 @@ describe("GET /api/auth/google/callback", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("GET /login – dynamic redirect", () => {
-	it("sets oauth_state cookie as base64 JSON with default next=/", async () => {
+	it("sets __Host-oauth_state cookie as base64 JSON with default next=/", async () => {
 		const res = await call(
 			makeRequest(`${BASE}/login`, "GET", {
 				headers: { "CF-Connecting-IP": "1.2.3.4" },
@@ -582,7 +582,7 @@ describe("GET /login – dynamic redirect", () => {
 		);
 		expect(res.status).toBe(302);
 		const cookies = res.headers.getAll("set-cookie");
-		const stateCookie = cookies.find(c => c.startsWith("oauth_state="));
+		const stateCookie = cookies.find(c => c.startsWith("__Host-oauth_state="));
 		expect(stateCookie).toBeDefined();
 		const stateValue = stateCookie!.split(";")[0].split("=").slice(1).join("=");
 		const payload = JSON.parse(atob(stateValue));
@@ -598,7 +598,7 @@ describe("GET /login – dynamic redirect", () => {
 		);
 		expect(res.status).toBe(302);
 		const cookies = res.headers.getAll("set-cookie");
-		const stateCookie = cookies.find(c => c.startsWith("oauth_state="));
+		const stateCookie = cookies.find(c => c.startsWith("__Host-oauth_state="));
 		const stateValue = stateCookie!.split(";")[0].split("=").slice(1).join("=");
 		const payload = JSON.parse(atob(stateValue));
 		expect(payload.next).toBe("/stats/");
@@ -612,13 +612,27 @@ describe("GET /login – dynamic redirect", () => {
 		);
 		expect(res.status).toBe(302);
 		const cookies = res.headers.getAll("set-cookie");
-		const stateCookie = cookies.find(c => c.startsWith("oauth_state="));
+		const stateCookie = cookies.find(c => c.startsWith("__Host-oauth_state="));
 		const stateValue = stateCookie!.split(";")[0].split("=").slice(1).join("=");
 		const payload = JSON.parse(atob(stateValue));
 		expect(payload.next).toBe("/");
 	});
 
-	it("state in Google URL matches the oauth_state cookie value", async () => {
+	it("falls back to next=/ for protocol-relative URL //evil.com (open-redirect protection)", async () => {
+		const res = await call(
+			makeRequest(`${BASE}/login?next=//evil.com`, "GET", {
+				headers: { "CF-Connecting-IP": "1.2.3.8" },
+			})
+		);
+		expect(res.status).toBe(302);
+		const cookies = res.headers.getAll("set-cookie");
+		const stateCookie = cookies.find(c => c.startsWith("__Host-oauth_state="));
+		const stateValue = stateCookie!.split(";")[0].split("=").slice(1).join("=");
+		const payload = JSON.parse(atob(stateValue));
+		expect(payload.next).toBe("/");
+	});
+
+	it("state in Google URL matches the __Host-oauth_state cookie value", async () => {
 		const res = await call(
 			makeRequest(`${BASE}/login?next=/dashboard`, "GET", {
 				headers: { "CF-Connecting-IP": "1.2.3.7" },
@@ -629,7 +643,7 @@ describe("GET /login – dynamic redirect", () => {
 		const googleUrl = new URL(location);
 		const stateInUrl = googleUrl.searchParams.get("state")!;
 		const cookies = res.headers.getAll("set-cookie");
-		const stateCookie = cookies.find(c => c.startsWith("oauth_state="));
+		const stateCookie = cookies.find(c => c.startsWith("__Host-oauth_state="));
 		const stateInCookie = stateCookie!.split(";")[0].split("=").slice(1).join("=");
 		expect(stateInUrl).toBe(stateInCookie);
 	});
