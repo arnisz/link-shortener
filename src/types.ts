@@ -1,8 +1,10 @@
 export interface Env {
 	hello_cf_spa_db: D1Database;
+	LINKS_KV: KVNamespace;
 	GOOGLE_CLIENT_ID: string;
 	GOOGLE_CLIENT_SECRET: string;
 	SESSION_SECRET: string;
+	WAECHTER_TOKEN: string;
 	APP_BASE_URL: string;
 }
 

@@ -10,7 +10,7 @@
 import { env, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import worker from "../src/index";
-import { makeRequest, setupTestDb, setupLinksTable, setupSpamTable, setupRateLimitTable, setupTagsTables } from "./helpers";
+import { makeRequest, setupTestDb, setupLinksTable, setupSpamTable, setupRateLimitTable, setupTagsTables, createLinksKvMock } from "./helpers";
 
 const BASE = "https://example.com";
 const CLIENT_IP = "1.2.3.4";
@@ -23,6 +23,8 @@ beforeAll(async () => {
 	await setupSpamTable(env.hello_cf_spa_db);
 	await setupRateLimitTable(env.hello_cf_spa_db);
 	await setupTagsTables(env.hello_cf_spa_db);
+	// KV-Mock für alle Tests bereitstellen
+	env.LINKS_KV = createLinksKvMock();
 });
 
 // ── Clean mutable tables before each test ────────────────────────────────────

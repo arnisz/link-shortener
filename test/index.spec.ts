@@ -23,17 +23,23 @@ import {
 	vi,
 } from "vitest";
 import worker from "../src/index";
-import { makeRequest, buildFakeIdToken, setupTestDb, seedSession, setupLinksTable, seedLink, setupRateLimitTable, setupTagsTables } from "./helpers";
+import { makeRequest, buildFakeIdToken, setupTestDb, seedSession, setupLinksTable, seedLink, setupRateLimitTable, setupTagsTables, createLinksKvMock } from "./helpers";
 
 const BASE = "https://example.com";
 
 // ── One-time schema migration ─────────────────────────────────────────────────
+
+let linksKvMock: ReturnType<typeof createLinksKvMock>;
 
 beforeAll(async () => {
 	await setupTestDb(env.hello_cf_spa_db);
 	await setupLinksTable(env.hello_cf_spa_db);
 	await setupRateLimitTable(env.hello_cf_spa_db);
 	await setupTagsTables(env.hello_cf_spa_db);
+
+	// KV-Mock für alle Tests bereitstellen
+	linksKvMock = createLinksKvMock();
+	env.LINKS_KV = linksKvMock;
 });
 
 // ── Clean DB state before every test ─────────────────────────────────────────
@@ -45,6 +51,8 @@ beforeEach(async () => {
 	await env.hello_cf_spa_db.prepare("DELETE FROM rate_limits").run();
 	await env.hello_cf_spa_db.prepare("DELETE FROM tags").run();
 	await env.hello_cf_spa_db.prepare("DELETE FROM link_tags").run();
+	// KV-Cache zwischen Tests leeren, um Test-Isolation sicherzustellen
+	linksKvMock?.reset();
 });
 
 // ── Tiny helper: call the worker and wait for ctx ─────────────────────────────
@@ -2282,6 +2290,8 @@ describe("POST /api/links – SSRF protection", () => {
 		expect(res.status).toBe(400);
 	});
 });
+
+
 
 
 

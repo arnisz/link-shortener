@@ -603,72 +603,99 @@ export async function handleCreateAnonymousLink(request: Request, env: Env): Pro
 
 /** GET /r/:code – redirects to the target URL; increments click count asynchronously. */
 export async function handleRedirect(code: string, env: Env, ctx: ExecutionContext, request: Request): Promise<Response> {
-	// Rate-limit redirect lookups to prevent short-code enumeration (60/min per IP).
-	const ip = request.headers.get("CF-Connecting-IP") ?? "127.0.0.1";
-	const { allowed } = await checkRateLimit(`redirect:${ip}`, env.hello_cf_spa_db, 60);
-	if (!allowed) {
-		return errResponse("Too many requests", 429, { "Retry-After": "60" });
-	}
+				// Rate-limit redirect lookups to prevent short-code enumeration (60/min per IP).
+				const ip = request.headers.get("CF-Connecting-IP") ?? "127.0.0.1";
+				const { allowed } = await checkRateLimit(`redirect:${ip}`, env.hello_cf_spa_db, 60);
+				if (!allowed) {
+					return errResponse("Too many requests", 429, { "Retry-After": "60" });
+				}
 
-	const link = await env.hello_cf_spa_db
-		.prepare("SELECT id, user_id, target_url, is_active, expires_at FROM links WHERE short_code = ?")
-		.bind(code)
-		.first<{ id: string; user_id: string | null; target_url: string; is_active: number; expires_at: string | null }>();
+				// --- Hot-Path mit KV-Cache (TTL 300s) ---
+				let cache: { id: string; user_id: string | null; target_url: string; is_active: number; status?: string; expires_at?: string } | null = null;
+				try {
+					const raw = await env.LINKS_KV.get(`link:${code}`);
+					if (raw) {
+						cache = JSON.parse(raw);
+					}
+				} catch {}
 
-	if (!link) {
-		log("REDIRECT", `Not found: code="${code}"`);
-		return errResponse("Short link not found", 404);
-	}
+				let link: { id: string; user_id: string | null; target_url: string; is_active: number; status?: string; expires_at?: string } | null = null;
+				if (cache) {
+					link = cache;
+				} else {
+					// Fallback: DB-Query
+					link = await env.hello_cf_spa_db
+						.prepare("SELECT id, user_id, target_url, is_active, status, expires_at FROM links WHERE short_code = ?")
+						.bind(code)
+						.first();
+					if (link) {
+						// Write to KV for next time (inkl. id + user_id für async click-count)
+						ctx.waitUntil(env.LINKS_KV.put(`link:${code}`,
+							JSON.stringify({ id: link.id, user_id: link.user_id, target_url: link.target_url, is_active: link.is_active, status: link.status, expires_at: link.expires_at }),
+							{ expirationTtl: 300 }
+						));
+					}
+				}
 
-	if (link.is_active === 0) {
-		log("REDIRECT", `Inactive: code="${code}"`);
-		return errResponse("Short link not found", 404);
-	}
+				if (!link) {
+					log("REDIRECT", `Not found: code=\"${code}\"`);
+					return errResponse("Short link not found", 404);
+				}
 
-	// MED-2: Einheitlich 404 statt 410 — verhindert Code-Enumeration via Status-Code-Unterschied.
-	// Angreifer können sonst via 410 erkennen, ob ein Code jemals existiert hat.
-	if (link.expires_at !== null && new Date(link.expires_at).getTime() < Date.now()) {
-		log("REDIRECT", `Expired: code="${code}"`);
-		return errResponse("Short link not found", 404);
-	}
+				// Hot-Path Status-Hierarchie (User-Intent vor System-Intent)
+				if (link.is_active === 0) {
+					log("REDIRECT", `Inactive: code=\"${code}\"`);
+					return errResponse("Short link not found", 404);
+				}
+				if (link.status === "blocked") {
+					log("REDIRECT", `Blocked: code=\"${code}\"`);
+					return errResponse("Short link not found", 404);
+				}
+				if (link.status === "warning") {
+					log("REDIRECT", `Warning: code=\"${code}\"`);
+					// Interstitial-Page (noch nicht implementiert)
+					return new Response(null, { status: 302, headers: { Location: `/warning?code=${code}` } });
+				}
+				if (link.expires_at !== null && new Date(link.expires_at).getTime() < Date.now()) {
+					log("REDIRECT", `Expired: code=\"${code}\"`);
+					return errResponse("Short link not found", 404);
+				}
 
-	// 🔴 SICHERHEIT: Strikte URL-Validierung auch bei Redirect
-	// Verhindert javascript:, data: URIs und Private IP Injection
-	const validation = validateTargetUrl(link.target_url);
-	if (!validation.ok) {
-		log('redirect', `Blocked invalid stored URL for code ${code}`);
-		return errResponse('Invalid redirect target', 500);
-	}
+				// 🔴 SICHERHEIT: Strikte URL-Validierung auch bei Redirect
+				const validation = validateTargetUrl(link.target_url);
+				if (!validation.ok) {
+					log('redirect', `Blocked invalid stored URL for code ${code}`);
+					return errResponse('Invalid redirect target', 500);
+				}
+				const destination = validation.url.href;
 
-	const destination = validation.url.href;
+				const ts = Math.floor(Date.now() / 1000);
+				const country = (request.cf?.country as string) || null;
+				const asn = (request.cf?.asn as number) || null;
+				const asnOrg = (request.cf?.asOrganization as string) || null;
+				const referrerHost = sanitizeReferrer(request.headers.get("Referer"));
 
-	const ts = Math.floor(Date.now() / 1000);
-	const country = (request.cf?.country as string) || null;
-	const asn = (request.cf?.asn as number) || null;
-	const asnOrg = (request.cf?.asOrganization as string) || null;
-	const referrerHost = sanitizeReferrer(request.headers.get("Referer"));
+				ctx.waitUntil((async () => {
+					try {
+						await env.hello_cf_spa_db
+							.prepare("UPDATE links SET click_count = click_count + 1, updated_at = ? WHERE id = ?")
+							.bind(new Date().toISOString(), link.id)
+							.run();
+					} catch (e) {
+						log("REDIRECT_ERR", `Failed to update click count `);
+					}
+				})());
 
-	ctx.waitUntil((async () => {
-		try {
-			await env.hello_cf_spa_db
-				.prepare("UPDATE links SET click_count = click_count + 1, updated_at = ? WHERE id = ?")
-				.bind(new Date().toISOString(), link.id)
-				.run();
-		} catch (e) {
-			log("REDIRECT_ERR", `Failed to update click count `);
-		}
-	})());
+				ctx.waitUntil((async () => {
+					try {
+						await env.hello_cf_spa_db
+							.prepare(`INSERT INTO clicks (ts, link_id, user_id, country, asn, asn_org, referrer_host) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+							.bind(ts, link.id, link.user_id, country, asn, asnOrg, referrerHost)
+							.run();
+					} catch (e) {
+						log("REDIRECT_ERR", `Failed to insert click log for link ${link.id}: ${e}`);
+					}
+				})());
 
-	ctx.waitUntil((async () => {
-		try {
-			await env.hello_cf_spa_db
-				.prepare(`INSERT INTO clicks (ts, link_id, user_id, country, asn, asn_org, referrer_host) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-				.bind(ts, link.id, link.user_id, country, asn, asnOrg, referrerHost)
-				.run();
-		} catch (e) {
-			log("REDIRECT_ERR", `Failed to insert click log for link ${link.id}: ${e}`);
-		}
-	})());
-
-	return new Response(null, { status: 302, headers: { Location: destination } });
+				return new Response(null, { status: 302, headers: { Location: destination } });
 }

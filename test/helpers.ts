@@ -135,28 +135,33 @@ export async function seedSession(
  * Call this once in beforeAll alongside setupTestDb().
  */
 export async function setupLinksTable(db: D1Database): Promise<void> {
-	await db
-		.prepare(
-			`CREATE TABLE IF NOT EXISTS links (` +
-			`id TEXT PRIMARY KEY, ` +
-			`user_id TEXT, ` + // nullable: NULL for anonymous links
-			`short_code TEXT NOT NULL UNIQUE, ` +
-			`target_url TEXT NOT NULL, ` +
-			`title TEXT, ` +
-			`created_at TEXT NOT NULL, ` +
-			`updated_at TEXT NOT NULL, ` +
-			`click_count INTEGER NOT NULL DEFAULT 0, ` +
-			`expires_at TEXT, ` +
-			`is_active INTEGER NOT NULL DEFAULT 1, ` +
-			`FOREIGN KEY (user_id) REFERENCES users(id))`
-		)
-		.run();
-	await db
-		.prepare(`CREATE INDEX IF NOT EXISTS idx_links_user_id ON links(user_id)`)
-		.run();
-	await db
-		.prepare(`CREATE INDEX IF NOT EXISTS idx_links_short_code ON links(short_code)`)
-		.run();
+			 await db
+			   .prepare(
+				 `CREATE TABLE IF NOT EXISTS links (` +
+				 `id TEXT PRIMARY KEY, ` +
+				 `user_id TEXT, ` + // nullable: NULL for anonymous links
+				 `short_code TEXT NOT NULL UNIQUE, ` +
+				 `target_url TEXT NOT NULL, ` +
+				 `title TEXT, ` +
+				 `created_at TEXT NOT NULL, ` +
+				 `updated_at TEXT NOT NULL, ` +
+				 `click_count INTEGER NOT NULL DEFAULT 0, ` +
+				 `expires_at TEXT, ` +
+				 `is_active INTEGER NOT NULL DEFAULT 1, ` +
+				 `FOREIGN KEY (user_id) REFERENCES users(id))`
+			   )
+			   .run();
+			 await db.prepare(`CREATE INDEX IF NOT EXISTS idx_links_user_id ON links(user_id)`).run();
+			 await db.prepare(`CREATE INDEX IF NOT EXISTS idx_links_short_code ON links(short_code)`).run();
+
+			 // Migration: links_phase6_security.sql (Wächter-Spalten und Index)
+			 await db.prepare(`ALTER TABLE links ADD COLUMN checked INTEGER NOT NULL DEFAULT 0`).run();
+			 await db.prepare(`ALTER TABLE links ADD COLUMN spam_score REAL NOT NULL DEFAULT 0.0`).run();
+			 await db.prepare(`ALTER TABLE links ADD COLUMN status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','warning','blocked'))`).run();
+			 await db.prepare(`ALTER TABLE links ADD COLUMN last_checked_at TEXT`).run();
+			 await db.prepare(`ALTER TABLE links ADD COLUMN claimed_at TEXT`).run();
+			 await db.prepare(`ALTER TABLE links ADD COLUMN manual_override INTEGER NOT NULL DEFAULT 0`).run();
+			 await db.prepare(`CREATE INDEX IF NOT EXISTS idx_links_scan_queue ON links(checked, last_checked_at, claimed_at)`).run();
 }
 
 /**
@@ -208,6 +213,11 @@ export async function seedLink(
 		title?: string | null;
 		isActive?: number;
 		expiresAt?: string | null;
+		// Phase 6 (Wächter)
+		checked?: number;
+		status?: string;
+		manualOverride?: number;
+		claimedAt?: string | null;
 	}
 ): Promise<{ id: string; shortCode: string }> {
 	const id = `link-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -216,8 +226,8 @@ export async function seedLink(
 
 	await db
 		.prepare(
-			`INSERT INTO links (id, user_id, short_code, target_url, title, created_at, updated_at, click_count, expires_at, is_active)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`
+			`INSERT INTO links (id, user_id, short_code, target_url, title, created_at, updated_at, click_count, expires_at, is_active, checked, status, manual_override, claimed_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`
 		)
 		.bind(
 			id,
@@ -228,7 +238,11 @@ export async function seedLink(
 			now,
 			now,
 			opts.expiresAt ?? null,
-			opts.isActive ?? 1
+			opts.isActive ?? 1,
+			opts.checked ?? 0,
+			opts.status ?? "active",
+			opts.manualOverride ?? 0,
+			opts.claimedAt ?? null
 		)
 		.run();
 
@@ -274,4 +288,46 @@ export async function setupRateLimitTable(db: D1Database): Promise<void> {
 			`PRIMARY KEY (ip, window_start))`
 		)
 		.run();
+}
+
+/**
+ * Creates the security_scans table in the test D1 database.
+ */
+export async function setupSecurityScansTable(db: D1Database): Promise<void> {
+	await db
+		.prepare(
+			`CREATE TABLE IF NOT EXISTS security_scans (` +
+			`id INTEGER PRIMARY KEY AUTOINCREMENT, ` +
+			`link_id TEXT NOT NULL REFERENCES links(id) ON DELETE CASCADE, ` +
+			`provider TEXT NOT NULL, ` +
+			`raw_score REAL NOT NULL, ` +
+			`raw_response TEXT, ` +
+			`scanned_at TEXT NOT NULL DEFAULT (datetime('now')))`
+		)
+		.run();
+	await db
+		.prepare(`CREATE INDEX IF NOT EXISTS idx_scans_link ON security_scans(link_id, scanned_at DESC)`)
+		.run();
+}
+
+/**
+ * Erstellt einen einfachen In-Memory-Mock für den Cloudflare KV-Namespace.
+ * Wird in den Tests als env.LINKS_KV verwendet.
+ */
+export function createLinksKvMock() {
+	const store = new Map<string, string>();
+	return {
+		async get(key: string) {
+			return store.has(key) ? store.get(key)! : null;
+		},
+		async put(key: string, value: string, opts?: { expirationTtl?: number }) {
+			store.set(key, value);
+		},
+		async delete(key: string) {
+			store.delete(key);
+		},
+		reset() {
+			store.clear();
+		},
+	};
 }

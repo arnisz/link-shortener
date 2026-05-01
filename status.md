@@ -150,6 +150,42 @@ v4 §3.4 Strategie 3 (Reserve-Option) hat `link_id INTEGER` — muss `TEXT` sein
 
 ---
 
+## 2026-05-01 — Phase 1 Wächter-Integration abgeschlossen
+
+- Migrationen `links_phase6_security.sql` und `security_scans.sql` angelegt (neue Felder in `links`, neue Tabelle `security_scans`)
+- Hot-Path-Redirect (`handleRedirect`) liest jetzt Status/URL aus KV-Cache (TTL 300s), DB-Fallback und Write-Through bei MISS
+- Status-Hierarchie im Redirect nach Konzept: `is_active` → `status` → `/warning` → 404/302
+- Platzhalter für alle `/api/internal/*`-Endpoints im Router implementiert (501 Not Implemented, Auth-Check vorbereitet)
+- `LINKS_KV: KVNamespace` zum `Env`-Interface (`src/types.ts`) hinzugefügt
+- Noch offen: URLhaus-Snapshot-Check im Static-Check, Wächter-Logik, Interstitial-Page, Bypass-Tracking
+
+### Bugfixes Phase 1 (Tests)
+
+- **`test/anonymous.spec.ts`**: `require("./helpers").createLinksKvMock()` durch korrekten ES-Import ersetzt — `require()` ist im Miniflare/Vitest-Worker-Pool (ESM-Kontext) nicht verfügbar
+- **`src/handlers/links.ts`**: KV-Payload korrigiert — `id` und `user_id` werden jetzt explizit mitgespeichert. Beim Cache-Hit wurde zuvor `id: code` (short_code statt `links.id`) gesetzt, was dazu führte, dass `UPDATE … WHERE id = ?` keine Zeile fand und `click_count` nicht inkrementiert wurde
+- **`test/helpers.ts`**: `createLinksKvMock()` um `reset()`-Methode erweitert, damit der In-Memory-Store zwischen Tests isoliert geleert werden kann
+- **`test/index.spec.ts`**: `linksKvMock`-Referenz außerhalb von `beforeAll` gehoben; `linksKvMock.reset()` in `beforeEach` für saubere Test-Isolation
+- Alle **316 Tests** grün (5 Suites)
+
+---
+
+## 2026-05-01 — Phase 1 Wächter-Integration: `/api/internal/*`-Endpunkte implementiert
+
+- Neuer Handler `src/handlers/internal.ts` mit allen 5 Endpunkten vollständig implementiert:
+  - `GET /api/internal/health` — 200 OK `{ ok: true }`, Bearer-Auth
+  - `GET /api/internal/links/pending?limit=N` — atomisches UPDATE … RETURNING (claimed_at = now()), limit 1–100
+  - `POST /api/internal/links/:id/scan-result` — schreibt `checked`, `spam_score`, `status`, `last_checked_at`, löscht `claimed_at`, `INSERT INTO security_scans`, invalidiert KV-Cache
+  - `POST /api/internal/links/release-stale` — gibt `claimed_at > 10 min` zurück, liefert `{ released: N }`
+  - `GET /api/internal/metrics` — Queue-Tiefe, Scans 24h, Status-Verteilung per DB-Batch-Query
+- Authentifizierung via `WAECHTER_TOKEN` (Bearer), Rate-Limit 60 req/min per Token (`checkRateLimit("internal:token", ...)`)
+- Router in `src/index.ts` aktualisiert (Platzhalter durch echte Handler ersetzt)
+- `WAECHTER_TOKEN: string` zu `src/types.ts` und `vitest.config.mts` (Test-Binding `"test-waechter-token"`) hinzugefügt
+- `test/helpers.ts` erweitert: `setupSecurityScansTable()`, `seedLink()` um Phase-6-Felder (`checked`, `status`, `manualOverride`, `claimedAt`)
+- Neue Test-Suite `test/internal.spec.ts` mit 30 Tests für alle 5 Endpunkte (Auth, Happy Path, Edge Cases, Validierung)
+- Alle **347 Tests** grün (6 Suites)
+
+---
+
 ## 2026-04-30
 
 ### Security: OAuth Open Redirect & Cookie Prefix Fixes

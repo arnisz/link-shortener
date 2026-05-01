@@ -1,6 +1,7 @@
 import type { Env } from "./types";
 import { handleGetMe, handleLogout, handleLogin, handleGoogleCallback } from "./handlers/auth";
 import { handleCreateLink, handleGetLinks, handleUpdateLink, handleDeleteLink, handleRedirect, handleCreateAnonymousLink } from "./handlers/links";
+import { handleInternalHealth, handleInternalLinksPending, handleInternalScanResult, handleInternalReleaseStale, handleInternalMetrics } from "./handlers/internal";
 import { applySecurityHeaders, errResponse, log } from "./utils";
 import { validateCsrf } from "./csrf";
 
@@ -26,6 +27,24 @@ async function router(request: Request, env: Env, ctx: ExecutionContext): Promis
 	if (pathname === "/api/links/anonymous" && method === "POST") return handleCreateAnonymousLink(request, env);
 	if (pathname === "/api/links" && method === "POST") return handleCreateLink(request, env);
 	if (pathname === "/api/links" && method === "GET")  return handleGetLinks(request, env);
+
+	// --- Interne Wächter-API ---
+	if (pathname === "/api/internal/health" && method === "GET") {
+		return handleInternalHealth(request, env);
+	}
+	if (pathname === "/api/internal/links/pending" && method === "GET") {
+		return handleInternalLinksPending(request, env);
+	}
+	const scanResultMatch = pathname.match(/^\/api\/internal\/links\/([0-9a-f]{32})\/scan-result$/);
+	if (scanResultMatch && method === "POST") {
+		return handleInternalScanResult(scanResultMatch[1], request, env);
+	}
+	if (pathname === "/api/internal/links/release-stale" && method === "POST") {
+		return handleInternalReleaseStale(request, env);
+	}
+	if (pathname === "/api/internal/metrics" && method === "GET") {
+		return handleInternalMetrics(request, env);
+	}
 
 	const updateMatch = pathname.match(/^\/api\/links\/([^/]+)\/update$/);
 	if (updateMatch && method === "POST") return handleUpdateLink(updateMatch[1], request, env);
