@@ -32,6 +32,10 @@ Required **secrets** (set via `wrangler secret put`):
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
 - `SESSION_SECRET`
+- `WAECHTER_TOKEN` *(planned — Phase 1 of the Wächter feature; Bearer token for `/api/internal/*` endpoints)*
+
+KV namespaces (planned — add to `wrangler.jsonc` and run `wrangler types`):
+- `LINKS_KV` — hot-path read-through cache (TTL 300 s), URLhaus domain snapshot, global-insert rate counter
 
 Var set in `wrangler.jsonc`: `APP_BASE_URL=https://aadd.li`. Observability is enabled (`"observability": { "enabled": true }`).
 
@@ -60,6 +64,9 @@ npx wrangler d1 execute hello-cf-spa-db --local --file=sql/rate_limits.sql
 npx wrangler d1 execute hello-cf-spa-db --local --file=sql/spam_filter.sql
 npx wrangler d1 execute hello-cf-spa-db --local --file=sql/spam-keywords-extended.sql
 npx wrangler d1 execute hello-cf-spa-db --local --file=sql/links_phase4_tags.sql
+# Planned (Wächter feature — do not apply until Phase 1 is implemented):
+# npx wrangler d1 execute hello-cf-spa-db --local --file=sql/links_phase6_security.sql
+# npx wrangler d1 execute hello-cf-spa-db --local --file=sql/security_scans.sql
 ```
 
 For remote (production): replace `--local` with `--remote`.
@@ -78,6 +85,20 @@ For remote (production): replace `--local` with `--remote`.
 | POST | `/api/links/:code/update` | `handleUpdateLink` |
 | POST | `/api/links/:code/delete` | `handleDeleteLink` |
 | GET, HEAD | `/r/:code` | `handleRedirect` (302 redirect) |
+
+### Planned routes (Wächter feature — not yet implemented)
+
+All `/api/internal/*` routes are **machine-to-machine only** and authenticated via `Authorization: Bearer ${WAECHTER_TOKEN}`. Return a generic 401 on token mismatch (no detail about _why_ authentication failed). Rate-limit: 60 req/min per token to contain damage in case of token leak.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/internal/health` | Wächter boot check — trivial 200 OK |
+| GET | `/api/internal/links/pending?limit=N` | Atomically claims up to N unchecked/stale links for scanning |
+| POST | `/api/internal/links/:id/scan-result` | Writes aggregated score + status + per-provider audit rows (`:id` = `links.id`, 32-char hex, immutable) |
+| POST | `/api/internal/links/release-stale` | Releases claimed_at > 10 min (called on Wächter boot + every 5 min) |
+| GET | `/api/internal/metrics` | Queue depth, scans last 24h, status distribution, provider quota (optional, auth) |
+| GET | `/warning?code=:code` | Interstitial page for `status='warning'` links |
+| GET | `/warning/proceed?code=:code&t=:token` | CSRF-token-protected bypass redirect for warning page |
 
 ## Conventions
 
@@ -172,3 +193,121 @@ https://developers.cloudflare.com/workers/runtime-apis/nodejs/
 
 Retrieve API references and limits from:
 `/kv/` · `/r2/` · `/d1/` · `/durable-objects/` · `/queues/` · `/vectorize/` · `/workers-ai/` · `/agents/`
+
+---
+
+## Wächter-Dienst (geplant — Architekturkonzept v4)
+
+> **Status:** Planungsphase. Kein Code geschrieben. Alle offenen Fragen aus v3 beantwortet (siehe `status.md` 2026-05-01). Restliche Diskussionspunkte (§14 v4) vor Phase 1 klären.
+
+### Überblick
+
+Externer Sicherheitsdienst (Hetzner VPS), der per adaptivem Pull-Loop Links aus D1 pollt, sie gegen Threat-Intelligence-Provider prüft und den Worker via HTTPS-API mit dem Scan-Ergebnis aktualisiert. Der Worker liest nur das aggregierte `status`-Feld — keine Kenntnis von Provider-Details.
+
+Der Worker funktioniert **vollständig ohne Wächter** weiter: Static-Check beim INSERT bleibt aktiv, dynamische Bewertung entfällt einfach. Kein Default-Interstitial für ungeprüfte Links (`checked=0`), da dies die UX zerstören würde (Cry-Wolf-Effekt).
+
+### Neue DB-Felder in `links` (planned Migration `sql/links_phase6_security.sql`)
+
+| Spalte | Typ | Default | Bedeutung |
+|--------|-----|---------|-----------|
+| `checked` | INTEGER | 0 | 0 = noch nicht geprüft, 1 = geprüft |
+| `spam_score` | REAL | 0.0 | Aggregierter Score 0.0–1.0 vom Wächter |
+| `status` | TEXT | `'active'` | `CHECK (status IN ('active','warning','blocked'))` |
+| `last_checked_at` | TEXT | NULL | ISO-8601, NULL = nie geprüft |
+| `claimed_at` | TEXT | NULL | Wächter-Locking (ersetzt `SELECT FOR UPDATE`) |
+| `manual_override` | INTEGER | 0 | 1 = Admin-Freigabe; Wächter überschreibt nicht |
+
+> `status` und `is_active` sind **zwei unabhängige Felder**: `is_active` (User-Intent) hat Vorrang vor `status` (System-Bewertung) — siehe Hot-Path-Hierarchie im Abschnitt „Hot-Path mit KV-Cache".
+
+### Neue Tabelle `security_scans` (planned Migration `sql/security_scans.sql`)
+
+Audit-Trail je Provider-Scan. `link_id` ist `TEXT` (Foreign Key auf `links.id` = 32-char Hex).
+`raw_response` wird vom Wächter nur für `raw_score >= 0.3` gesendet (Retention-Strategie).
+Cleanup im `scheduled`-Handler: Score < 0.3 nach 7 Tagen, Score ≥ 0.3 nach 90 Tagen.
+
+### Hot-Path mit KV-Cache (geplant)
+
+```
+KV.get(`link:${code}`)
+  HIT  → { target_url, is_active, status } aus Cache (TTL 300s, ~5ms 99p)
+  MISS → SELECT target_url, is_active, status FROM links WHERE short_code = ?
+         → KV.put(`link:${code}`, {target_url, is_active, status}, {expirationTtl: 300})
+
+Status-Hierarchie (User-Intent vor System-Intent):
+  if (is_active === 0)         → 404   // Eigentümer hat Link deaktiviert
+  elif (status === 'blocked')  → 404
+  elif (status === 'warning')  → 302 → /warning?code=:code
+  else                         → 302 → target_url
+```
+
+Cache-Invalidierung nach Wächter-Update: `LINKS_KV.delete(`link:${code}`)` (in `scan-result`-Handler).
+Cache-Invalidierung nach User-Aktion: Toggle `is_active` und Inline-Edit `short_code` müssen `KV.delete` mitführen.
+**Bekanntes Risiko:** Maximaler Drift zwischen D1-Status und KV-Cache: 5 Minuten (TTL). Für Spam-Schutz akzeptiert.
+
+### Wächter-Loop-Charakteristik
+
+- Adaptives Polling: 5 s (aktiv) bis 60 s (Leerlauf, exponentieller Backoff)
+- Bounded Concurrency: `SCAN_CONCURRENCY=20` (env-konfigurierbar), verhindert Blockade durch langsame Provider
+- `claimed_at`-Mechanismus: atomares `UPDATE … RETURNING` — race-condition-frei auch bei zwei parallelen Wächter-Instanzen
+- Beim Boot: `POST /api/internal/links/release-stale` einmalig; danach alle 5 Minuten
+
+### Score-Aggregation
+
+Gewichtetes Maximum (nicht Durchschnitt), damit ein hochvertrauenswürdiger Treffer nicht durch viele unauffällige Provider verwässert wird.
+
+### Status-Mapping (Default-Schwellenwerte, als Wächter-Env-Variablen konfigurierbar)
+
+| Score | Status | Hot-Path-Wirkung |
+|-------|--------|-----------------|
+| `< 0.70` | `active` | 302 Redirect (inkl. Bereich 0.30–0.70: aktiv, aber im Audit-Trail) |
+| `0.70 – 0.94` | `warning` | Interstitial-Page (`/warning?code=:code`) |
+| `≥ 0.95` | `blocked` | 404 |
+
+### Backpressure-Schichten
+
+1. **Per-IP Rate-Limit** (existiert): 10/min anonym; 60/min authentifiziert (letzteres neu geplant)
+2. **Globaler Insert-Cap** (KV Minute-Bucket): ~1000/min, 503 bei Überschreitung
+3. **Queue-Depth-Throttle** (Worker-Memory-Cache, 30 s): `COUNT(*) WHERE checked=0` > Limit → 503
+4. **Provider-Quota-Guard** (Wächter-seitig): `QuotaExhaustedError` lässt Aggregation mit restlichen Providern laufen
+
+### Sicherheitskonventionen für `/api/internal/*`
+
+- **Authentifizierung:** `Authorization: Bearer ${WAECHTER_TOKEN}` — 401 bei Mismatch, ohne Erklärung warum
+- **Endpunkt-Präfix:** `/api/internal/*` (nicht `/api/admin/*`) — klare „Maschine-zu-Maschine"-Semantik
+- **Rate-Limit:** 60 req/min pro Token
+- **CSRF auf `/warning/proceed`:** `generateSignedToken("warning:" + shortCode, SESSION_SECRET, 5 * 60 * 1000)` — HMAC-SHA256 + Timestamp, TTL 5 min. `SESSION_SECRET` wird wiederverwendet; Subject-Trennung verhindert Cross-Replay mit Session-CSRF-Tokens. Keinen neuen Secret nötig.
+- **HTML-Escape:** `target_url` auf `/warning`-Seite **immer** mit `escapeHtml()` — gespeicherte URLs sind User-Input, eine `javascript:`-URL als `href` wäre Stored-XSS
+- **Bypass-Endpoint `/warning/proceed`** ist ein separater, token-geschützter Endpunkt — darf **nicht** `/r/:code` sein, sonst ist der Schutz wirkungslos
+- **`manual_override=1`**: Wächter schreibt `status` nur, wenn `manual_override = 0` in der `WHERE`-Klausel — verhindert, dass Admin-Freigaben überschrieben werden
+
+### Wächter-Projekt (separates Repo)
+
+Der Wächter ist ein **separates Projekt** und wird **nicht** in dieses Repo eingecheckt. Kein `waechter/`-Subdirectory, kein `shared/`-Verzeichnis hier. Der API-Kontrakt (Endpunkte, Request/Response-Schemata, TypeScript-Interfaces) ist vollständig in `waechter.md` spezifiziert. Dieses Repo implementiert ausschließlich die Worker-Seite der Schnittstelle (`/api/internal/*`-Endpunkte, Interstitial-Page, KV-Cache, DB-Migrationen).
+
+### Bewusst nicht im MVP
+
+- Kein Default-Interstitial bei `checked=0` (Cry-Wolf-Effekt)
+- Kein Push-Webhook vom Worker zum Wächter (Pull reicht für TTFS, Wächter kann hinter NAT bleiben)
+- Keine ML-Heuristik
+- Kein synchroner externer Provider-Aufruf im Worker (nur lokaler Static-Check, <5ms)
+- Kein mTLS zwischen Worker und Wächter
+- Kein Admin-Dashboard für Scans (`wrangler d1 execute` reicht für Operatoren)
+- Kein `/api/internal/links/queue-size`-Endpoint (defer — nachrüstbar ohne Breaking Change)
+- Kein Cloudflare Turnstile auf `POST /short` (defer — erst bei messbarer Bot-Last in Production)
+
+### Heuristik-Owner-Grenze
+
+Die Bewertungslogik (Provider-Gewichtung, Scores, Heuristik-Regeln) gehört **ausschließlich in den Wächter**. Der Worker hält die `spam_keywords`-Tabelle nur für den synchronen Static-Check beim INSERT (einfacher Keyword-Blocker, <5 ms, kein Netz-Call). Das ist keine Heuristik-Datenbank — die Trennung ist architektonisch gewollt: deshalb läuft die Bewertung extern.
+
+### Bypass-Click-Tracking (geplant — Phase 5b)
+
+```sql
+CREATE TABLE bypass_clicks (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  short_code TEXT NOT NULL,
+  asn        TEXT,            -- z. B. "AS3320" — nicht personenbezogen
+  hour_bucket TEXT NOT NULL   -- strftime('%Y-%m-%d %H', 'now'), z. B. "2026-05-01 13"
+);
+```
+
+Zweck: False-Positive-Analyse (Bypass-Rate pro Link und Stunde). Kein sekundengenauer Timestamp. ASN ist nicht personenbezogen. Insert in `handleWarningProceed` via `ctx.waitUntil(...)` (nicht blockierend).

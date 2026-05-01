@@ -1,5 +1,155 @@
 # Status Log
 
+## 2026-05-01
+
+### Planung: Wächter-Dienst (Architekturkonzept v4)
+
+**Status:** Planungsphase — kein Code geschrieben. Alle offenen Fragen aus v3 beantwortet (siehe unten). Alle Diskussionspunkte §14 v4 entschieden (2026-05-01). **Bereit für Phase 1.**
+
+#### Zusammenfassung
+
+Der Wächter-Dienst ist ein externer Sicherheitsdienst (Hetzner VPS), der per adaptivem Pull-Loop neue Links aus D1 holt, sie gegen externe Threat-Intelligence-Provider (Google Safe Browsing, Heuristik, optional VirusTotal) prüft, einen aggregierten Spam-Score berechnet und das Ergebnis via HTTPS-API an den Worker zurückmeldet. Der Worker steuert auf Basis des `status`-Feldes (`active` / `warning` / `blocked`) den Hot-Path-Redirect, eine neue Interstitial-Page oder eine 404-Antwort.
+
+#### Rollout-Phasen (geplant) — Worker-Anteil dieses Repos
+
+> Phasen, die den Wächter selbst betreffen (Loop, Provider, Scoring), sind im separaten Wächter-Projekt geplant (Pflichtenheft: `waechter.md`).
+
+| Phase | Inhalt | Repo |
+|-------|--------|------|
+| **1** | DB-Migration (neue Spalten + `security_scans`), KV-Cache im Hot-Path, Static-Check-Erweiterung (URLhaus-Snapshot in KV), `/api/internal/*`-Endpunkte implementieren | **dieses Repo** |
+| **2** | Wächter auf Hetzner deployen, nur `HeuristicProvider`, nur Beobachtung (Status-Schreiben noch deaktiviert) | **Wächter-Projekt** |
+| **3** | Status-Übernahme aktivieren, KV-Invalidierung aktiv | **Wächter-Projekt** |
+| **4** | Google Safe Browsing als zweiter Provider | **Wächter-Projekt** |
+| **5** | Interstitial-Page (`/warning`, `/warning/proceed`) implementieren | **dieses Repo** |
+| **5b** | `bypass_clicks`-Tabelle + Logging in `/warning/proceed` (ASN + short_code + hour_bucket) | **dieses Repo** |
+| **6** | 30-Tage-Re-Scan (bereits durch Pending-Query abgedeckt) | **Wächter-Projekt** |
+| **7** | Push-Trigger (optional, nur bei messbarem TTFS-Problem) | **beide** |
+
+#### Neue Worker-Routen (geplant)
+
+| Methode | Pfad | Authentifizierung |
+|---------|------|-------------------|
+| GET | `/api/internal/health` | Bearer `WAECHTER_TOKEN` |
+| GET | `/api/internal/links/pending?limit=N` | Bearer `WAECHTER_TOKEN` |
+| POST | `/api/internal/links/:id/scan-result` | Bearer `WAECHTER_TOKEN` (**`:id` = `links.id`, 32-char Hex**) |
+| POST | `/api/internal/links/release-stale` | Bearer `WAECHTER_TOKEN` |
+| GET | `/api/internal/metrics` | Bearer `WAECHTER_TOKEN` (optional, §9.5) |
+| GET | `/warning?code=:code` | öffentlich |
+| GET | `/warning/proceed?code=:code&t=:token` | öffentlich (CSRF-Token) |
+
+#### Neue D1-Spalten in `links` (geplant, Migration `links_phase6_security.sql`)
+
+```sql
+ALTER TABLE links ADD COLUMN checked         INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE links ADD COLUMN spam_score      REAL    NOT NULL DEFAULT 0.0;
+ALTER TABLE links ADD COLUMN status          TEXT    NOT NULL DEFAULT 'active'
+  CHECK (status IN ('active', 'warning', 'blocked'));
+ALTER TABLE links ADD COLUMN last_checked_at TEXT;   -- ISO-8601, NULL = nie geprüft
+ALTER TABLE links ADD COLUMN claimed_at      TEXT;   -- Wächter-Locking
+ALTER TABLE links ADD COLUMN manual_override INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX idx_links_scan_queue ON links(checked, last_checked_at, claimed_at);
+```
+
+#### Neue Tabelle `security_scans` (Migration `security_scans.sql`)
+
+```sql
+CREATE TABLE security_scans (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  link_id      TEXT NOT NULL REFERENCES links(id) ON DELETE CASCADE,
+  -- ⚠️ link_id muss TEXT sein (links.id ist 32-char Hex) — Konzept hatte irrtümlich INTEGER
+  provider     TEXT NOT NULL,
+  raw_score    REAL NOT NULL,
+  raw_response TEXT,           -- NULL für raw_score < 0.3 (Retention-Strategie 2)
+  scanned_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX idx_scans_link ON security_scans(link_id, scanned_at DESC);
+```
+
+#### Neue Bindings und Secrets (geplant)
+
+| Name | Typ | Zweck |
+|------|-----|-------|
+| `LINKS_KV` | KV Namespace | Hot-Path Read-Through-Cache (TTL 300s) + URLhaus-Snapshot + Global-Insert-Counter |
+| `WAECHTER_TOKEN` | Secret | Bearer-Auth für `/api/internal/*` |
+
+#### Retention-Strategie für `security_scans`
+
+- Unauffällige Scans (`raw_score < 0.3`): Cleanup nach 7 Tagen (im `scheduled`-Handler)
+- Auffällige Scans: Cleanup nach 90 Tagen
+- `raw_response` wird vom Wächter nur für `raw_score >= 0.3` gesendet (spart ~1-2 KB/Eintrag)
+
+#### Score-Schwellenwerte (Wächter-Env-Variablen)
+
+| Aggregierter Score | Status | Wirkung im Hot-Path |
+|-------------------|--------|----------------------|
+| `< 0.70` | `active` | 302 Redirect |
+| `0.70 – 0.94` | `warning` | 302 → `/warning?code=:code` |
+| `≥ 0.95` | `blocked` | 404 |
+
+#### Hot-Path Status-Hierarchie (handleRedirect)
+
+```
+if (is_active === 0)         → 404  // User-Intent hat Vorrang
+elif (status === 'blocked')  → 404
+elif (status === 'warning')  → 302 → /warning?code=:code
+else                         → 302 → target_url
+```
+
+`is_active` (User-Intent) wird **vor** `status` (System-Bewertung) geprüft. Ein vom Eigentümer deaktivierter Link zeigt kein Wächter-Interstitial.
+
+#### Backpressure-Schichten (geplant)
+
+1. **Per-IP Rate-Limit** (existiert): 10/min anonym, 60/min authentifiziert (letzteres neu)
+2. **Globaler Insert-Cap** via KV-Minute-Bucket: Default 1000/min, gibt 503 zurück
+3. **Queue-Depth-Throttle**: Worker prüft `COUNT(*) WHERE checked=0 AND claimed_at IS NULL` beim Insert; Ergebnis 30s im Module-Scope gecacht; bei Überschreitung 503
+4. **Wächter-seitig**: Quota-Tracking pro Provider (Provider wirft `QuotaExhaustedError`, Aggregation läuft mit restlichen Providern weiter)
+
+#### CSRF-Schema für `/warning/proceed` (v4 §8.4)
+
+`SESSION_SECRET` wird wiederverwendet. Neuer generischer Helper `generateSignedToken(subject, secret, ttlMs)`:
+
+```
+// Warning-Bypass-Token:
+generateSignedToken(`warning:${shortCode}`, SESSION_SECRET)
+// Verifikation:
+verifySignedToken(token, `warning:${shortCode}`, SESSION_SECRET)
+```
+
+Subject-Trennung verhindert Cross-Replay zwischen Session-CSRF-Tokens und Warning-Bypass-Tokens. Falls Refactor zu invasiv: parallele Funktion `generateWarningToken(shortCode, secret)` mit identischem Format.
+
+#### Wächter-Projekt
+
+Der Wächter wird als **separates Projekt** auf einem Hetzner VPS entwickelt und betrieben. Das Pflichtenheft ist in `waechter.md` in diesem Repo dokumentiert (API-Kontrakt, TypeScript-Interfaces, Loop-Verhalten, Provider-Architektur, Deployment). Kein Wächter-Code in diesem Repo.
+
+#### Offene Fragen (v3) — Status nach v4
+
+| # | Frage | Status |
+|---|-------|--------|
+| 1 | `target_url` vs `original_url` | ✅ **RESOLVED** — `target_url` ist kanonisch |
+| 2 | `short_code` vs `slug` | ✅ **RESOLVED** — `short_code` / `:code` sind kanonisch |
+| 3 | `link_id`-Typ in `security_scans` | ✅ **RESOLVED** — `TEXT` (32-char Hex) |
+| 4 | `is_active` vs `status` Vorrang | ✅ **RESOLVED** — `is_active` zuerst (User-Intent), dann `status` |
+| 5 | `warning` in `ALIAS_RESERVED` | ✅ **RESOLVED** — Ja, muss hinzugefügt werden (§8.1) |
+| 6 | CSRF-Schema für `/warning/proceed` | ✅ **RESOLVED** — `generateSignedToken(subject, SESSION_SECRET)` (§8.4) |
+| 7 | Wächter-Repository | ✅ **RESOLVED** — Separates Projekt (eigenes Repo). Pflichtenheft: `waechter.md` |
+| 8 | `:id` in interner API | ✅ **RESOLVED** — `links.id` (32-char Hex, immutable) |
+
+#### Bekannte Inkonsistenz in v4 (nicht MVP-kritisch)
+
+v4 §3.4 Strategie 3 (Reserve-Option) hat `link_id INTEGER` — muss `TEXT` sein, da `links.id` ein 32-char Hex-String ist (wie korrekt in §3.2). Fehler liegt im alternativen Schema, nicht im MVP-Schema. Bei Verwendung von Strategie 3 korrigieren.
+
+#### Diskussionspunkte (v4 §14) — Entscheidungen 2026-05-01
+
+| # | Thema | Entscheidung |
+|---|-------|--------------|
+| 1 | **Bypass-Tracking** | ✅ **JA** — `bypass_clicks`-Tabelle mit `ASN + short_code + hour_bucket` (`strftime('%Y-%m-%d %H', 'now')`). Kein sekundengenauer Timestamp. DSGVO-neutral (ASN nicht personenbezogen). Migration `sql/bypass_clicks.sql` als eigene Phase (Phase 5b). |
+| 2 | **Re-Scan-Intervall** | ✅ **Fix 30 Tage** — Simpel halten. Dynamisches Intervall nach Click-Frequenz erst wenn 30-Tage-Fix nachweislich unzureichend ist. |
+| 3 | **Heuristik-Listen-Owner** | ✅ **Wächter-Owner** — Bewertungslogik (Heuristiken, Scores, Provider-Gewichtung) gehört ausschließlich in den Wächter. Der Worker hält `spam_keywords` nur für den synchronen Static-Check beim INSERT; diese Liste ist kein Heuristik-Regelwerk, sondern ein einfacher Keyword-Blocker. Die Trennung ist bewusst: deshalb läuft der Wächter extern. |
+| 4 | **`/api/internal/links/queue-size`** | ⏸️ **Defer** — Kein MVP-Blocker. Kann als schemafreier GET-Endpoint nachgerüstet werden ohne Breaking Change. Entscheidung nach Phase 3 (wenn Backpressure-Verhalten in Production beobachtbar ist). |
+| 5 | **Cloudflare Turnstile (Phase 8)** | ⏸️ **Defer** — Kein MVP-Blocker. Frontend- und Worker-Änderungen nötig; erst evaluieren wenn Bot-Last in Production messbar wird. |
+
+---
+
 ## 2026-04-30
 
 ### Security: OAuth Open Redirect & Cookie Prefix Fixes
