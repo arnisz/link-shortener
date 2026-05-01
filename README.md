@@ -1,49 +1,45 @@
-aadd.li is a lightweight, serverless link shortener built on Cloudflare Workers and D1, designed as a clean and secure foundation for a production-ready web application.
+# aadd.li – Secure & Serverless Open Source URL Shortener
 
-The project focuses on simplicity, robustness, and practical architecture rather than feature bloat. It provides a minimal browser-based interface combined with a hardened backend and a fully tested API.
+🚀 **Official Hosted Instance:** [aadd.li](https://aadd.li)
 
-Core features:
-- Google OAuth authentication
-- Session-based user management
-- Creation of short links with optional aliases
-- Expiration dates and active/inactive state
-- Safe redirect handling with proper HTTP status codes
-- Per-user link management
-- Input validation and abuse-resistant design
-- Fully test-covered backend (Vitest)
+**aadd.li** is a lightning-fast, privacy-focused open-source URL shortener. Built entirely on a serverless edge architecture using Cloudflare Workers and D1, it provides a clean, secure, and production-ready alternative to bloated commercial link management tools.
 
-Security features (April 2026):
-- 🔒 Open Redirect Protection (URL Schema Whitelist + SSRF Prevention)
-- 🔒 TOCTOU-Resistant Access Control (Atomic permission checks)
-- 🔒 XSS Prevention (HTML escaping utilities)
-- 🔒 Rate Limiting (Cloudflare CF-Connecting-IP aware)
-- 🔒 Session Security (__Host- Cookie Prefix)
-- 🔒 CSRF Protection (Token-based + Legacy Origin checks)
+Whether you need anonymous short links that expire automatically or a hardened backend for per-user link management, aadd.li is designed for simplicity and maximum security.
 
-**See [SECURITY_PATCHES.md](./SECURITY_PATCHES.md) for detailed security implementation.**
+## 🌟 Why aadd.li? (Core Features)
 
-Technical highlights:
-- Cloudflare Workers (edge runtime)
-- Cloudflare D1 (SQLite-based serverless database)
-- No external backend or traditional server required
-- Clean separation between API and frontend
-- Security-focused implementation (nonce validation, strict input checks, no information leaks)
+We focus on robust architecture and privacy rather than feature bloat. The official instance at [aadd.li](https://aadd.li) showcases this hardened MVP:
 
-This project serves as a solid starting point for:
-- SaaS-style web applications
-- Edge-first architectures
-- Browser-based productivity tools
-- Future extensions like analytics, API access, or browser integrations
+* **Privacy-First & Auto-Expiration:** Anonymous links expire automatically (e.g., after 48h), leaving no permanent trace.
+* **Secure User Management:** Google OAuth integration for session-based management, custom aliases, and permanent links.
+* **Edge-First Performance:** Zero cold starts and global low latency thanks to Cloudflare Workers.
+* **Abuse-Resistant:** Strict input validation, rate limiting, and safe redirect handling with proper HTTP status codes.
 
-The current state represents a hardened MVP that is safe to deploy and operate.
+## 🛡️ Enterprise-Grade Security (As of Mai 2026)
 
-## License
+Security isn't an afterthought. The backend is fully test-covered (Vitest) and hardened against common web vulnerabilities:
+
+* **Open Redirect Protection:** Strict URL schema whitelisting and SSRF prevention.
+* **TOCTOU-Resistant Access Control:** Atomic permission checks prevent race conditions.
+* **XSS & CSRF Prevention:** Comprehensive HTML escaping utilities, Token-based + Legacy Origin checks for CSRF.
+* **Session Security:** Strict `__Host-` cookie prefixes.
+* **Rate Limiting:** Intelligent, CF-Connecting-IP aware throttling.
+
+> 📖 **See [SECURITY_PATCHES.md](./SECURITY_PATCHES.md)** for deep dives into our security implementation.
+
+## 💻 Technical Stack & Architecture
+
+aadd.li requires no traditional server backend, making it highly scalable and cheap to operate. It serves as a perfect blueprint for modern SaaS applications, browser extensions, or productivity tools.
+
+* **Runtime:** Cloudflare Workers (Edge runtime)
+* **Database:** Cloudflare D1 (Serverless SQLite)
+* **API Design:** Clean, strict separation between frontend and a fully tested API.
+* **Security Context:** Nonce validation, strict input checks, zero information leaks.
+
+## 📄 License & Copyright
 
 This project is licensed under the **GNU General Public License v3 (GPLv3)**.
+See [LICENSE](./LICENSE) for the full license text and [COPYRIGHT](./COPYRIGHT) for third-party dependency details.
 
-See [LICENSE](./LICENSE) for the full license text.
-
-See [COPYRIGHT](./COPYRIGHT) for copyright notices and third-party dependency licenses.
-
-© 2024–2026 Arnold Szathmary & Contributors
+© 2024–2026 Arnold Szathmary & Contributors — Home of [aadd.li](https://aadd.li)
 
