@@ -636,7 +636,7 @@ export async function handleRedirect(code: string, env: Env, ctx: ExecutionConte
 	// Verhindert javascript:, data: URIs und Private IP Injection
 	const validation = validateTargetUrl(link.target_url);
 	if (!validation.ok) {
-		log('redirect', `Blocked invalid stored URL for code ${code}: ${validation.error}`);
+		log('redirect', `Blocked invalid stored URL for code ${code}`);
 		return errResponse('Invalid redirect target', 500);
 	}
 
@@ -655,7 +655,7 @@ export async function handleRedirect(code: string, env: Env, ctx: ExecutionConte
 				.bind(new Date().toISOString(), link.id)
 				.run();
 		} catch (e) {
-			log("REDIRECT_ERR", `Failed to update click count for link ${link.id}: ${e}`);
+			log("REDIRECT_ERR", `Failed to update click count `);
 		}
 	})());
 
@@ -668,8 +668,6 @@ export async function handleRedirect(code: string, env: Env, ctx: ExecutionConte
 		} catch (e) {
 			log("REDIRECT_ERR", `Failed to insert click log for link ${link.id}: ${e}`);
 		}
-		//temporärer log arni 26.04.2026
-		log("ANALYTICS_TEST", JSON.stringify({ ts, country, asn, asnOrg, referrerHost }));
 	})());
 
 	return new Response(null, { status: 302, headers: { Location: destination } });
