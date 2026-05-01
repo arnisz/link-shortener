@@ -32,11 +32,14 @@ const TRANSLATIONS = {
     'seo.title':          'Free URL Shortener with Expiring Links',
     'seo.p1':             'aadd.li is a fast and simple URL shortener designed for privacy and ease of use. Create short links instantly without the need for an account.',
     'seo.p2':             'Unlike other services, our anonymous links expire automatically after 48 hours, keeping the web clean. For permanent links and custom aliases, you can optionally sign in with your Google account.',
+    'seo.p3':             'To ensure maximum transparency and security, aadd.li is fully open source. The code is publicly available and can be reviewed at any time.',
     'seo.features.title': 'Why use aadd.li?',
     'seo.features.1':     'Create short links instantly',
     'seo.features.2':     'Links expire automatically (48h default)',
     'seo.features.3':     'Optional login for custom aliases and management',
     'seo.features.4':     'No unnecessary overhead or tracking',
+    'seo.features.5':     '100% Open Source: View source code on GitHub',
+    'seo.features.5.link': 'GitHub',
 
     // ── App page ─────────────────────────────────────────────────────────────────
     'app.page.title':                  'aadd.li – App',
@@ -126,11 +129,14 @@ const TRANSLATIONS = {
     'seo.title':          'Kostenloser Link-Kürzer mit ablaufenden Links',
     'seo.p1':             'aadd.li ist ein schneller und einfacher URL-Shortener, der auf Datenschutz und Benutzerfreundlichkeit ausgelegt ist. Erstellen Sie sofort Kurzlinks, ohne ein Konto erstellen zu müssen.',
     'seo.p2':             'Im Gegensatz zu anderen Diensten laufen unsere anonymen Links automatisch nach 48 Stunden ab. Für dauerhafte Links und eigene Aliase können Sie sich optional mit Ihrem Google-Konto anmelden.',
+    'seo.p3':             'Um maximale Transparenz und Sicherheit zu gewährleisten, ist aadd.li vollständig quelloffen. Der Code ist öffentlich zugänglich und kann jederzeit geprüft werden.',
     'seo.features.title': 'Warum aadd.li nutzen?',
     'seo.features.1':     'Links sofort erstellen',
     'seo.features.2':     'Links laufen automatisch ab (Standard 48h)',
     'seo.features.3':     'Optionaler Login für eigene Aliase und Verwaltung',
     'seo.features.4':     'Kein unnötiger Ballast oder Tracking',
+    'seo.features.5':     '100 % Open Source: Quellcode auf GitHub ansehen',
+    'seo.features.5.link': 'GitHub',
 
     // ── App page ─────────────────────────────────────────────────────────────────
     'app.page.title':                  'aadd.li – Link-Kürzer',
@@ -220,11 +226,14 @@ const TRANSLATIONS = {
     'seo.title':          'Acortador de URLs gratuito con enlaces que caducan',
     'seo.p1':             'aadd.li es un acortador de URLs rápido y sencillo diseñado para la privacidad y la facilidad de uso. Crea enlaces cortos al instante sin necesidad de una cuenta.',
     'seo.p2':             'A diferencia de otros servicios, nuestros enlaces anónimos caducan automáticamente después de 48 horas. Para enlaces permanentes y alias personalizados, puedes iniciar sesión opcionalmente con tu cuenta de Google.',
+    'seo.p3':             'Para garantizar la máxima transparencia y seguridad, aadd.li es completamente de código abierto. El código es público y puede ser revisado en cualquier momento.',
     'seo.features.title': '¿Por qué usar aadd.li?',
     'seo.features.1':     'Crea enlaces cortos al instante',
     'seo.features.2':     'Los enlaces caducan automáticamente (48h por defecto)',
     'seo.features.3':     'Inicio de sesión opcional para alias personalizados y gestión',
     'seo.features.4':     'Sin sobrecarga innecesaria ni rastreo',
+    'seo.features.5':     '100% Open Source: Ver el código fuente en GitHub',
+    'seo.features.5.link': 'GitHub',
 
     // ── App page ─────────────────────────────────────────────────────────────────
     'app.page.title':                  'aadd.li – App',
@@ -314,11 +323,14 @@ const TRANSLATIONS = {
     'seo.title':          'Raccourcisseur d\'URL gratuit avec liens expirables',
     'seo.p1':             'aadd.li est un raccourcisseur d\'URL rapide et simple conçu pour la confidentialité et la facilité d\'utilisation. Créez des liens courts instantanément sans avoir besoin de compte.',
     'seo.p2':             'Contrairement à d\'autres services, nos liens anonymes expirent automatiquement après 48 heures. Pour des liens permanents et des alias personnalisés, vous pouvez facultativement vous connecter avec votre compte Google.',
+    'seo.p3':             'Pour garantir une transparence et une sécurité maximales, aadd.li est entièrement open source. Le code est accessible au public et peut être consulté à tout moment.',
     'seo.features.title': 'Pourquoi utiliser aadd.li ?',
     'seo.features.1':     'Créez des liens courts instantanément',
     'seo.features.2':     'Les liens expirent automatiquement (48h par défaut)',
     'seo.features.3':     'Connexion facultative pour les alias personnalisés et la gestion',
     'seo.features.4':     'Pas de surcharge inutile ni de suivi',
+    'seo.features.5':     '100% Open Source : Voir le code source sur GitHub',
+    'seo.features.5.link': 'GitHub',
 
     // ── App page ─────────────────────────────────────────────────────────────────
     'app.page.title':                  'aadd.li – Application',
