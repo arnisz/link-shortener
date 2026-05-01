@@ -251,6 +251,25 @@ Alle **387 Tests** grün (8 Suites)
 
 ---
 
+## 2026-05-02 — Bugfix: KV eventual-consistency Race beim Re-Evaluation blocked→warning
+
+### Problem
+
+Wenn der Wächter einen Link von `blocked` auf `warning` hochstuft, erschien für Nutzer weiterhin HTTP 404 statt der Interstitial-Page. Ursache: `handleInternalScanResult` rief `LINKS_KV.delete()` auf — Cloudflare KV `delete()` ist **eventual consistent** und propagiert das Löschen nicht sofort an alle Edge-Nodes. Andere Edge-Nodes konnten den alten `blocked`-Eintrag noch bis zu ~60 Sekunden liefern, was `handleRedirect` zu einem 404 veranlasste.
+
+### Fix
+
+- **`src/handlers/internal.ts`**: `LINKS_KV.delete()` durch `LINKS_KV.put()` mit dem vollständigen aktualisierten Payload ersetzt. `put()` propagiert den neuen Status (`warning`, `active` etc.) sofort an alle Edges — kein Drift-Fenster. Das `RETURNING`-Clause im UPDATE wurde um `target_url, is_active, expires_at, user_id` erweitert, damit alle KV-Pflichtfelder befüllt werden können.
+- **`src/handlers/internal.ts`**: Defensiver `env.LINKS_KV`-Null-Check hinzugefügt (Fails open wenn Binding nicht konfiguriert).
+
+### Tests
+
+- **`test/internal.spec.ts`**: Bestehenden KV-Test umbenannt und auf `put`-Semantik angepasst — prüft jetzt `cached.status === "blocked"` statt `toBeNull()`.
+- **`test/internal.spec.ts`**: Neuer End-to-End-Test `re-evaluation: blocked→warning causes /r/:code to redirect to /warning (not 404)` — simuliert stalen KV-Eintrag mit `blocked`, sendet `scan-result` mit `warning`, prüft KV enthält `warning` und Redirect geht zu `/warning` (302).
+- Alle **388 Tests** grün (8 Suites)
+
+---
+
 ## 2026-04-30
 
 ### Security: OAuth Open Redirect & Cookie Prefix Fixes

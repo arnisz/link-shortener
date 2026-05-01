@@ -121,8 +121,9 @@ export async function handleInternalScanResult(id: string, request: Request, env
 
 	// 1. Update links row — only if manual_override = 0
 	let short_code: string | null = null;
+	let updatedLink: { short_code: string; target_url: string; is_active: number; expires_at: string | null; user_id: string | null } | null = null;
 	try {
-		const updateResult = await env.hello_cf_spa_db
+		updatedLink = await env.hello_cf_spa_db
 			.prepare(
 				`UPDATE links
 				 SET checked = 1,
@@ -131,17 +132,17 @@ export async function handleInternalScanResult(id: string, request: Request, env
 				     last_checked_at = datetime('now'),
 				     claimed_at = NULL
 				 WHERE id = ? AND manual_override = 0
-				 RETURNING short_code`
+				 RETURNING short_code, target_url, is_active, expires_at, user_id`
 			)
 			.bind(body.aggregate_score, body.status, id)
-			.first<{ short_code: string }>();
+			.first<{ short_code: string; target_url: string; is_active: number; expires_at: string | null; user_id: string | null }>();
 
-		if (!updateResult) {
+		if (!updatedLink) {
 			// Link not found or manual_override = 1
 			log("INTERNAL", `scan-result: link id=${id} not found or manual_override=1`);
 			return errResponse("Not found", 404);
 		}
-		short_code = updateResult.short_code;
+		short_code = updatedLink.short_code;
 	} catch (e) {
 		log("INTERNAL_ERR", `Failed to update link ${id}: ${String(e)}`);
 		return errResponse("Internal server error", 500);
@@ -166,12 +167,26 @@ export async function handleInternalScanResult(id: string, request: Request, env
 		log("INTERNAL_ERR", `Failed to insert security_scans for link ${id}: ${String(e)}`);
 	}
 
-	// 3. KV cache invalidation
-	if (short_code) {
+	// 3. KV cache update — write new status directly instead of deleting.
+	// KV delete() is eventually consistent and may leave stale blocked/warning entries
+	// at other edge nodes for up to ~60s. A put() with the updated payload propagates
+	// the new status immediately and avoids the re-evaluation race condition.
+	if (short_code && updatedLink && env.LINKS_KV) {
 		try {
-			await env.LINKS_KV.delete(`link:${short_code}`);
+			await env.LINKS_KV.put(
+				`link:${short_code}`,
+				JSON.stringify({
+					id,
+					user_id: updatedLink.user_id,
+					target_url: updatedLink.target_url,
+					is_active: updatedLink.is_active,
+					status: body.status,
+					expires_at: updatedLink.expires_at,
+				}),
+				{ expirationTtl: 300 }
+			);
 		} catch (e) {
-			log("INTERNAL_ERR", `Failed to invalidate KV cache for ${short_code}: ${String(e)}`);
+			log("INTERNAL_ERR", `Failed to update KV cache for ${short_code}: ${String(e)}`);
 		}
 	}
 

@@ -329,10 +329,10 @@ describe("POST /api/internal/links/:id/scan-result", () => {
 		expect(providers).toContain("heuristic");
 	});
 
-	it("invalidates KV cache after scan-result", async () => {
+	it("updates KV cache with new status after scan-result (put instead of delete)", async () => {
 		const { userId } = await seedSession(env.hello_cf_spa_db);
 		const { id } = await seedHexLink({ userId, shortCode: "scan3", checked: 0 });
-		// Pre-populate KV cache
+		// Pre-populate KV cache with old active status
 		await env.LINKS_KV.put("link:scan3", JSON.stringify({ id, user_id: userId, target_url: "https://example.com", is_active: 1, status: "active" }));
 
 		await call(bearerRequest(`/api/internal/links/${id}/scan-result`, "POST", VALID_TOKEN, {
@@ -341,9 +341,11 @@ describe("POST /api/internal/links/:id/scan-result", () => {
 			scans: [{ provider: "heuristic", raw_score: 0.97, raw_response: null }],
 		}));
 
-		// KV should be invalidated
-		const cached = await env.LINKS_KV.get("link:scan3");
-		expect(cached).toBeNull();
+		// KV should now contain the updated status (put, not delete — avoids eventual-consistency drift)
+		const raw = await env.LINKS_KV.get("link:scan3");
+		expect(raw).not.toBeNull();
+		const cached = JSON.parse(raw!);
+		expect(cached.status).toBe("blocked");
 	});
 
 	it("returns 404 for manual_override=1 links (Wächter darf nicht überschreiben)", async () => {
@@ -406,6 +408,46 @@ describe("POST /api/internal/links/:id/scan-result", () => {
 			scans: [{ provider: "", raw_score: 0.5, raw_response: null }],
 		}));
 		expect(res.status).toBe(400);
+	});
+
+	it("re-evaluation: blocked→warning causes /r/:code to redirect to /warning (not 404)", async () => {
+		const { userId } = await seedSession(env.hello_cf_spa_db);
+		const { id } = await seedHexLink({
+			userId,
+			shortCode: "reeval1",
+			targetUrl: "https://example.com/target",
+			checked: 1,
+			status: "blocked",
+		});
+
+		// Simulate stale KV cache with old blocked status
+		await env.LINKS_KV.put("link:reeval1", JSON.stringify({
+			id,
+			user_id: userId,
+			target_url: "https://example.com/target",
+			is_active: 1,
+			status: "blocked",
+		}));
+
+		// Wächter re-evaluates: blocked → warning
+		const scanRes = await call(bearerRequest(`/api/internal/links/${id}/scan-result`, "POST", VALID_TOKEN, {
+			aggregate_score: 0.80,
+			status: "warning",
+			scans: [{ provider: "heuristic", raw_score: 0.80, raw_response: null }],
+		}));
+		expect(scanRes.status).toBe(200);
+
+		// KV must now contain the updated warning status (not the old blocked)
+		const raw = await env.LINKS_KV.get("link:reeval1");
+		expect(raw).not.toBeNull();
+		const cached = JSON.parse(raw!);
+		expect(cached.status).toBe("warning");
+
+		// Redirect must now go to /warning (not 404)
+		const redirectReq = makeRequest(`${BASE}/r/reeval1`);
+		const redirectRes = await call(redirectReq);
+		expect(redirectRes.status).toBe(302);
+		expect(redirectRes.headers.get("Location")).toBe("/warning?code=reeval1");
 	});
 });
 
