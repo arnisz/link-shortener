@@ -16,3 +16,9 @@ export const TARGET_URL_MAX_LEN = 2000;
 export const TITLE_MAX_LEN = 200;
 export const TAG_MAX_PER_LINK = 10;
 export const TAG_NAME_MAX_LEN = 50;
+/** Backpressure: Globaler Insert-Cap pro Minute (Schicht 2). */
+export const GLOBAL_INSERT_CAP = 1000;
+/** Backpressure: Maximale Queue-Tiefe (unchecked, unclaimed) vor 503 (Schicht 3). */
+export const QUEUE_DEPTH_THROTTLE_LIMIT = 5000;
+/** Backpressure: TTL des Modul-Scope-Queue-Depth-Caches in ms (Schicht 3). */
+export const QUEUE_DEPTH_CACHE_TTL_MS = 30_000;

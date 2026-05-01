@@ -211,6 +211,26 @@ Alle **376 Tests** grün (7 Suites)
 
 ---
 
+## 2026-05-01 — Backpressure-Schichten 2 + 3 implementiert
+
+### Änderungen
+
+- **`src/config.ts`**: Drei neue Konstanten: `GLOBAL_INSERT_CAP = 1000`, `QUEUE_DEPTH_THROTTLE_LIMIT = 5000`, `QUEUE_DEPTH_CACHE_TTL_MS = 30_000`
+- **`src/handlers/links.ts`**: Zwei neue private Backpressure-Helper + zwei Test-Hilfsfunktionen:
+  - `checkGlobalInsertCap(env)` — Schicht 2: KV-Minute-Bucket (`insert_count:<bucket>`, TTL 120 s), 503 bei Überschreitung; **Fails open** bei KV-Fehler
+  - `checkQueueDepthThrottle(db)` — Schicht 3: `COUNT(*) WHERE checked=0 AND claimed_at IS NULL`, 30 s Modul-Scope-Cache, 503 bei Überschreitung; **Fails open** bei DB-Fehler
+  - `_resetQueueDepthCache()` + `_setQueueDepthCacheForTest(depth)` — Testhelper für Cache-Isolation und Cache-Injektion
+  - Beide Checks in `handleCreateAnonymousLink` und `handleCreateLink` eingebaut (Schicht 3 vor Schicht 2, damit der Throttle zuerst greift)
+- **`test/backpressure.spec.ts`** (neu, 11 Tests):
+  - Schicht 2: Normal (201), KV voll → 503, KV-Fehler → Fails open, Counter-Increment-Verifizierung
+  - Schicht 3: Normal (201), Cache-Inject → 503 (anonym + auth), Cache-Reset → neu abfragen, Cached-Ergebnis persistiert
+
+### Test-Ergebnis
+
+Alle **387 Tests** grün (8 Suites)
+
+---
+
 ## 2026-04-30
 
 ### Security: OAuth Open Redirect & Cookie Prefix Fixes

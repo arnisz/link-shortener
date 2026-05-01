@@ -1,5 +1,5 @@
 import type { Env } from "../types";
-import { TARGET_URL_MAX_LEN, TITLE_MAX_LEN, SHORT_CODE_GENERATION_RETRIES, TAG_MAX_PER_LINK } from "../config";
+import { TARGET_URL_MAX_LEN, TITLE_MAX_LEN, SHORT_CODE_GENERATION_RETRIES, TAG_MAX_PER_LINK, GLOBAL_INSERT_CAP, QUEUE_DEPTH_THROTTLE_LIMIT, QUEUE_DEPTH_CACHE_TTL_MS } from "../config";
 import { randomId, jsonResponse, errResponse, log } from "../utils";
 import { generateShortCode, validateAlias, normalizeAlias, isValidFutureIso, requireJson, checkSpamFilter, validateTargetUrl, validateTag } from "../validation";
 import { checkRateLimit } from "../rateLimit";
@@ -8,8 +8,68 @@ import { validateCsrfToken, validateMutationCsrf } from "../csrf";
 import { getCookie, sanitizeReferrer } from "../utils";
 
 // ---------------------------------------------------------------------------
+// Backpressure: Modul-Scope-Cache für Queue-Depth-Throttle (Schicht 3)
+// ---------------------------------------------------------------------------
+let _queueDepthCache: { depth: number; expiresAt: number } | null = null;
+
+/** Resets the module-scope queue-depth cache (for test isolation). */
+export function _resetQueueDepthCache(): void {
+	_queueDepthCache = null;
+}
+
+/** Injects a specific queue depth into the module-scope cache (for test isolation). */
+export function _setQueueDepthCacheForTest(depth: number): void {
+	_queueDepthCache = { depth, expiresAt: Date.now() + QUEUE_DEPTH_CACHE_TTL_MS };
+}
+
+// ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Backpressure Schicht 2: Globaler Insert-Cap via KV-Minute-Bucket.
+ * Liest den aktuellen Minuten-Counter aus KV, inkrementiert ihn und gibt
+ * `true` zurück, wenn das Limit überschritten ist (→ 503 senden).
+ * Schlägt KV fehl (Fails open).
+ */
+async function checkGlobalInsertCap(env: Env): Promise<boolean> {
+	try {
+		const bucket = Math.floor(Date.now() / 60_000).toString();
+		const key = `insert_count:${bucket}`;
+		const raw = await env.LINKS_KV.get(key);
+		const current = raw ? parseInt(raw, 10) : 0;
+		if (current >= GLOBAL_INSERT_CAP) return true;
+		await env.LINKS_KV.put(key, String(current + 1), { expirationTtl: 120 });
+		return false;
+	} catch {
+		// Fails open — kurzzeitiger KV-Ausfall ist akzeptabel
+		return false;
+	}
+}
+
+/**
+ * Backpressure Schicht 3: Queue-Depth-Throttle.
+ * Zählt unchecked + unclaimed Links. Ergebnis wird 30 s im Modul-Scope gecacht.
+ * Gibt `true` zurück wenn das Limit überschritten ist (→ 503 senden).
+ * Schlägt DB fehl (Fails open).
+ */
+async function checkQueueDepthThrottle(db: D1Database): Promise<boolean> {
+	const now = Date.now();
+	if (_queueDepthCache && now < _queueDepthCache.expiresAt) {
+		return _queueDepthCache.depth >= QUEUE_DEPTH_THROTTLE_LIMIT;
+	}
+	try {
+		const row = await db
+			.prepare("SELECT COUNT(*) AS cnt FROM links WHERE checked = 0 AND claimed_at IS NULL")
+			.first<{ cnt: number }>();
+		const depth = row?.cnt ?? 0;
+		_queueDepthCache = { depth, expiresAt: now + QUEUE_DEPTH_CACHE_TTL_MS };
+		return depth >= QUEUE_DEPTH_THROTTLE_LIMIT;
+	} catch {
+		// Fails open
+		return false;
+	}
+}
 
 /**
  * Tries to generate a unique short code by retrying up to SHORT_CODE_GENERATION_RETRIES times.
@@ -101,6 +161,18 @@ export async function handleCreateLink(request: Request, env: Env): Promise<Resp
 		typeof body.alias === "string"
 			? normalizeAlias(body.alias)
 			: "";
+
+	// Backpressure Schicht 3: Queue-Depth-Throttle
+	if (await checkQueueDepthThrottle(env.hello_cf_spa_db)) {
+		log("BACKPRESSURE", "Queue-Depth-Throttle ausgelöst (auth)");
+		return errResponse("Dienst vorübergehend überlastet. Bitte versuche es später erneut.", 503, { "Retry-After": "60" });
+	}
+
+	// Backpressure Schicht 2: Globaler Insert-Cap
+	if (await checkGlobalInsertCap(env)) {
+		log("BACKPRESSURE", "Globaler Insert-Cap erreicht (auth)");
+		return errResponse("Dienst vorübergehend überlastet. Bitte versuche es später erneut.", 503, { "Retry-After": "60" });
+	}
 
 	let shortCode: string;
 
@@ -575,6 +647,18 @@ export async function handleCreateAnonymousLink(request: Request, env: Env): Pro
 	const { allowed } = await checkRateLimit(ip, env.hello_cf_spa_db);
 	if (!allowed) {
 		return errResponse("Zu viele Anfragen. Bitte warte eine Minute.", 429, { "Retry-After": "60" });
+	}
+
+	// Backpressure Schicht 3: Queue-Depth-Throttle
+	if (await checkQueueDepthThrottle(env.hello_cf_spa_db)) {
+		log("BACKPRESSURE", "Queue-Depth-Throttle ausgelöst (anonym)");
+		return errResponse("Dienst vorübergehend überlastet. Bitte versuche es später erneut.", 503, { "Retry-After": "60" });
+	}
+
+	// Backpressure Schicht 2: Globaler Insert-Cap
+	if (await checkGlobalInsertCap(env)) {
+		log("BACKPRESSURE", "Globaler Insert-Cap erreicht (anonym)");
+		return errResponse("Dienst vorübergehend überlastet. Bitte versuche es später erneut.", 503, { "Retry-After": "60" });
 	}
 
 	// Auto-generate short code with collision retry
