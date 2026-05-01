@@ -2,6 +2,7 @@ import type { Env } from "./types";
 import { handleGetMe, handleLogout, handleLogin, handleGoogleCallback } from "./handlers/auth";
 import { handleCreateLink, handleGetLinks, handleUpdateLink, handleDeleteLink, handleRedirect, handleCreateAnonymousLink } from "./handlers/links";
 import { handleInternalHealth, handleInternalLinksPending, handleInternalScanResult, handleInternalReleaseStale, handleInternalMetrics } from "./handlers/internal";
+import { handleWarning, handleWarningProceed } from "./handlers/warning";
 import { applySecurityHeaders, errResponse, log } from "./utils";
 import { validateCsrf } from "./csrf";
 
@@ -57,6 +58,9 @@ async function router(request: Request, env: Env, ctx: ExecutionContext): Promis
 	{
 		return handleRedirect(redirectMatch[1], env, ctx, request);
 	}
+
+	if (pathname === "/warning" && method === "GET") return handleWarning(request, env);
+	if (pathname === "/warning/proceed" && method === "GET") return handleWarningProceed(request, env, ctx);
 
 	return new Response("Not found", { status: 404 });
 }

@@ -186,6 +186,31 @@ v4 §3.4 Strategie 3 (Reserve-Option) hat `link_id INTEGER` — muss `TEXT` sein
 
 ---
 
+## 2026-05-01 — Phase 5 + 5b Wächter-Integration: Interstitial-Page implementiert
+
+### Änderungen
+
+- **`src/validation.ts`**: `"warning"` zu `ALIAS_RESERVED` hinzugefügt (§8.1 des Konzepts v4)
+- **`src/csrf.ts`**: `generateSignedToken(subject, secret, ttlMs)` und `verifySignedToken(token, subject, secret)` neu — HMAC-SHA256 + Timestamp, TTL 5 min Default; Subject-Trennung verhindert Cross-Replay mit Session-CSRF-Tokens
+- **`src/handlers/warning.ts`** (neu): `handleWarning` (GET `/warning`) — rendert HTML-Interstitial-Page, HTML-escaped `target_url`, generiert Bypass-Token; `handleWarningProceed` (GET `/warning/proceed`) — verifiziert Token, 302 Redirect auf `target_url`, Phase-5b-Bypass-Logging via `ctx.waitUntil`
+- **`src/index.ts`**: Router um `GET /warning` und `GET /warning/proceed` erweitert
+- **`sql/bypass_clicks.sql`** (neu, Phase 5b): Migration für `bypass_clicks`-Tabelle (`short_code`, `asn`, `hour_bucket`) — kein sekundengenauer Timestamp, ASN nicht personenbezogen
+- **`test/helpers.ts`**: `setupBypassClicksTable()` neu hinzugefügt
+- **`test/warning.spec.ts`** (neu): 29 Tests — `generateSignedToken`/`verifySignedToken` Unit-Tests, `ALIAS_RESERVED`-Check, alle Edge Cases für `/warning` und `/warning/proceed`
+
+### Sicherheit
+
+- `target_url` wird immer mit `escapeHtml()` gerendert (Stored-XSS-Schutz)
+- `/warning/proceed` ist ein separater Endpunkt (nicht `/r/:code`) — Bypass-Schutz nicht umgehbar
+- Token-Subject `"warning:<code>"` verhindert Cross-Replay mit Session-CSRF-Tokens
+- Anti-Enumeration: `/warning` und `/warning/proceed` geben identisches 404 für nicht-existente, inaktive, abgelaufene und geblockte Links
+
+### Test-Ergebnis
+
+Alle **376 Tests** grün (7 Suites)
+
+---
+
 ## 2026-04-30
 
 ### Security: OAuth Open Redirect & Cookie Prefix Fixes

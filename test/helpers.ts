@@ -311,6 +311,24 @@ export async function setupSecurityScansTable(db: D1Database): Promise<void> {
 }
 
 /**
+ * Creates the bypass_clicks table in the test D1 database (Phase 5b).
+ */
+export async function setupBypassClicksTable(db: D1Database): Promise<void> {
+	await db
+		.prepare(
+			`CREATE TABLE IF NOT EXISTS bypass_clicks (` +
+			`id INTEGER PRIMARY KEY AUTOINCREMENT, ` +
+			`short_code TEXT NOT NULL, ` +
+			`asn TEXT, ` +
+			`hour_bucket TEXT NOT NULL)`
+		)
+		.run();
+	await db
+		.prepare(`CREATE INDEX IF NOT EXISTS idx_bypass_clicks_code_hour ON bypass_clicks(short_code, hour_bucket)`)
+		.run();
+}
+
+/**
  * Erstellt einen einfachen In-Memory-Mock für den Cloudflare KV-Namespace.
  * Wird in den Tests als env.LINKS_KV verwendet.
  */
