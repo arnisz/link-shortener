@@ -46,11 +46,19 @@
 			"database_name": "hello-cf-spa-db",
 			"database_id": "8d591c9b-42ac-4786-b33a-f0a6b2246cfb"
 		}
-	]
-	,
+	],
 	"triggers": {
-		"crons": ["0 3 * * *"]
-	}
+		"crons": [
+			"0 3 * * *"
+		]
+	},
+	"kv_namespaces": [
+		{
+			"binding": "LINKS_KV",
+			"id": "9e7b1f4897164f5a996c74a16d2d562a",
+			"preview_id": "4d89aab81e384008a2091f35327d3604"
+		}
+	]
 	/**
 	 * Smart Placement
 	 * https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement

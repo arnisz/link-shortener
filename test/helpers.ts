@@ -329,6 +329,11 @@ export async function setupBypassClicksTable(db: D1Database): Promise<void> {
 }
 
 /**
+ * Typ des In-Memory-KV-Mocks (für Test-Isolation via reset()).
+ */
+export type LinksKvMock = ReturnType<typeof createLinksKvMock>;
+
+/**
  * Erstellt einen einfachen In-Memory-Mock für den Cloudflare KV-Namespace.
  * Wird in den Tests als env.LINKS_KV verwendet.
  */

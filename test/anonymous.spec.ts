@@ -10,10 +10,12 @@
 import { env, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import worker from "../src/index";
-import { makeRequest, setupTestDb, setupLinksTable, setupSpamTable, setupRateLimitTable, setupTagsTables, createLinksKvMock } from "./helpers";
+import { makeRequest, setupTestDb, setupLinksTable, setupSpamTable, setupRateLimitTable, setupTagsTables, createLinksKvMock, type LinksKvMock } from "./helpers";
 
 const BASE = "https://example.com";
 const CLIENT_IP = "1.2.3.4";
+
+let linksKvMock: LinksKvMock;
 
 // ── One-time schema setup ─────────────────────────────────────────────────────
 
@@ -24,7 +26,8 @@ beforeAll(async () => {
 	await setupRateLimitTable(env.hello_cf_spa_db);
 	await setupTagsTables(env.hello_cf_spa_db);
 	// KV-Mock für alle Tests bereitstellen
-	env.LINKS_KV = createLinksKvMock();
+	linksKvMock = createLinksKvMock();
+	env.LINKS_KV = linksKvMock;
 });
 
 // ── Clean mutable tables before each test ────────────────────────────────────
@@ -35,6 +38,8 @@ beforeEach(async () => {
 	await env.hello_cf_spa_db.prepare("DELETE FROM tags").run();
 	await env.hello_cf_spa_db.prepare("DELETE FROM link_tags").run();
 	// Do NOT delete spam_keywords: module-scope cache is already warm after first query.
+	// KV-Store zurücksetzen für Test-Isolation (insert_count + link-Cache)
+	linksKvMock.reset();
 });
 
 // ── Helper ────────────────────────────────────────────────────────────────────

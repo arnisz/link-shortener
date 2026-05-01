@@ -211,6 +211,26 @@ Alle **376 Tests** grün (7 Suites)
 
 ---
 
+## 2026-05-01 — Produktionsbugfix: LINKS_KV Binding fehlte in Produktion
+
+### Ursache
+
+`TypeError: Cannot read properties of undefined (reading 'put')` bei `GET /r/:code` in Produktion (FC 1101). Das `LINKS_KV` KV-Namespace-Binding war in `wrangler.jsonc` nicht eingetragen — `env.LINKS_KV` war in der Produktionsumgebung `undefined`.
+
+### Änderungen
+
+- **`wrangler.jsonc`**: `kv_namespaces`-Block mit Binding `LINKS_KV` hinzugefügt (ID: `9e7b1f4897164f5a996c74a16d2d562a`, Preview-ID: `4d89aab81e384008a2091f35327d3604`)
+- **`src/handlers/links.ts`**: Defensive Absicherung aller drei `LINKS_KV`-Zugriffe — `checkGlobalInsertCap` gibt jetzt `false` (Fails open) zurück wenn `!env.LINKS_KV`; `handleRedirect` prüft `if (env.LINKS_KV)` vor `get()` und `put()` — KV-Cache überspringen statt crashen wenn Binding nicht konfiguriert
+- **`worker-configuration.d.ts`**: `wrangler types` nach Binding-Update ausgeführt
+- **`test/anonymous.spec.ts`**: `linksKvMock`-Referenz aus `beforeAll` nach außen gehoben + `linksKvMock.reset()` in `beforeEach` hinzugefügt — behebt Cross-Test-Isolation-Problem: KV-Insert-Counter aus Backpressure-Tests schlug den Rate-Limit-Test (429 wurde nicht ausgelöst wenn Counter bereits voll war)
+- **`test/helpers.ts`**: `export type LinksKvMock` exportiert für typgerechten Import in `anonymous.spec.ts`
+
+### Test-Ergebnis
+
+Alle **387 Tests** grün (8 Suites). Deployed: Version `5fa2b72f-ad97-415e-bfc1-083725f59c9d`.
+
+---
+
 ## 2026-05-01 — Backpressure-Schichten 2 + 3 implementiert
 
 ### Änderungen

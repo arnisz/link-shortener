@@ -33,6 +33,7 @@ export function _setQueueDepthCacheForTest(depth: number): void {
  * Schlägt KV fehl (Fails open).
  */
 async function checkGlobalInsertCap(env: Env): Promise<boolean> {
+	if (!env.LINKS_KV) return false; // Fails open wenn Binding nicht konfiguriert
 	try {
 		const bucket = Math.floor(Date.now() / 60_000).toString();
 		const key = `insert_count:${bucket}`;
@@ -696,12 +697,14 @@ export async function handleRedirect(code: string, env: Env, ctx: ExecutionConte
 
 				// --- Hot-Path mit KV-Cache (TTL 300s) ---
 				let cache: { id: string; user_id: string | null; target_url: string; is_active: number; status?: string; expires_at?: string } | null = null;
-				try {
-					const raw = await env.LINKS_KV.get(`link:${code}`);
-					if (raw) {
-						cache = JSON.parse(raw);
-					}
-				} catch {}
+				if (env.LINKS_KV) {
+					try {
+						const raw = await env.LINKS_KV.get(`link:${code}`);
+						if (raw) {
+							cache = JSON.parse(raw);
+						}
+					} catch {}
+				}
 
 				let link: { id: string; user_id: string | null; target_url: string; is_active: number; status?: string; expires_at?: string } | null = null;
 				if (cache) {
@@ -712,7 +715,7 @@ export async function handleRedirect(code: string, env: Env, ctx: ExecutionConte
 						.prepare("SELECT id, user_id, target_url, is_active, status, expires_at FROM links WHERE short_code = ?")
 						.bind(code)
 						.first();
-					if (link) {
+					if (link && env.LINKS_KV) {
 						// Write to KV for next time (inkl. id + user_id für async click-count)
 						ctx.waitUntil(env.LINKS_KV.put(`link:${code}`,
 							JSON.stringify({ id: link.id, user_id: link.user_id, target_url: link.target_url, is_active: link.is_active, status: link.status, expires_at: link.expires_at }),
