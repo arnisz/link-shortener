@@ -23,7 +23,7 @@ import {
 	vi,
 } from "vitest";
 import worker from "../src/index";
-import { makeRequest, buildFakeIdToken, setupTestDb, seedSession, setupLinksTable, seedLink, setupRateLimitTable, setupTagsTables, createLinksKvMock, setupClicksTable } from "./helpers";
+import { makeRequest, buildFakeIdToken, setupTestDb, seedSession, setupLinksTable, seedLink, setupRateLimitTable, setupTagsTables, createLinksKvMock, setupClicksTable, setupSecurityScansTable } from "./helpers";
 import { Env as AppEnv } from "../src/types";
 
 const BASE = "https://example.com";
@@ -37,7 +37,8 @@ beforeAll(async () => {
 	await setupLinksTable(env.hello_cf_spa_db);
 	await setupRateLimitTable(env.hello_cf_spa_db);
 	await setupTagsTables(env.hello_cf_spa_db);
-	await setupClicksTable(env.hello_cf_spa_db);
+ await setupClicksTable(env.hello_cf_spa_db);
+ await setupSecurityScansTable(env.hello_cf_spa_db);
 
 	// KV-Mock für alle Tests bereitstellen
 	linksKvMock = createLinksKvMock();
@@ -1564,6 +1565,93 @@ describe("POST /api/links/:id/delete", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// KV-Cache-Invalidierung nach User-Mutationen
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("KV-Cache-Invalidierung – DELETE", () => {
+	it("löscht den KV-Eintrag nach erfolgreichem delete", async () => {
+		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
+		const { shortCode } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "kv-del-1" });
+
+		// KV-Eintrag manuell vorbelegen
+		await linksKvMock.put(`link:${shortCode}`, JSON.stringify({ target_url: "https://example.com", is_active: 1, status: "active" }));
+		expect(await linksKvMock.get(`link:${shortCode}`)).not.toBeNull();
+
+		await call(makeRequest(`${BASE}/api/links/${shortCode}/delete`, "POST", { cookies: { "__Host-sid": sessionId } }));
+
+		expect(await linksKvMock.get(`link:${shortCode}`)).toBeNull();
+	});
+
+	it("lässt KV-Einträge anderer Codes unangetastet", async () => {
+		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
+		const { shortCode } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "kv-del-2" });
+		await linksKvMock.put("link:other-code", JSON.stringify({ target_url: "https://other.example.com" }));
+
+		await call(makeRequest(`${BASE}/api/links/${shortCode}/delete`, "POST", { cookies: { "__Host-sid": sessionId } }));
+
+		expect(await linksKvMock.get("link:other-code")).not.toBeNull();
+	});
+});
+
+describe("KV-Cache-Invalidierung – UPDATE", () => {
+	it("löscht den KV-Eintrag nach is_active-Toggle", async () => {
+		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
+		const { shortCode } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "kv-upd-act" });
+		await linksKvMock.put(`link:${shortCode}`, JSON.stringify({ target_url: "https://example.com", is_active: 1, status: "active" }));
+
+		await call(makeRequest(`${BASE}/api/links/${shortCode}/update`, "POST", {
+			cookies: { "__Host-sid": sessionId },
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ is_active: false }),
+		}));
+
+		expect(await linksKvMock.get(`link:${shortCode}`)).toBeNull();
+	});
+
+	it("löscht den alten KV-Eintrag nach Alias-Änderung", async () => {
+		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
+		const { shortCode } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "kv-old-alias" });
+		await linksKvMock.put(`link:${shortCode}`, JSON.stringify({ target_url: "https://example.com", is_active: 1, status: "active" }));
+
+		await call(makeRequest(`${BASE}/api/links/${shortCode}/update`, "POST", {
+			cookies: { "__Host-sid": sessionId },
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ alias: "kv-new-alias" }),
+		}));
+
+		expect(await linksKvMock.get(`link:${shortCode}`)).toBeNull();
+	});
+
+	it("löscht auch den neuen Code aus KV wenn er dort gecached war", async () => {
+		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
+		const { shortCode } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "kv-src-alias" });
+		await linksKvMock.put("link:kv-tgt-alias", JSON.stringify({ target_url: "https://stale.example.com" }));
+
+		await call(makeRequest(`${BASE}/api/links/${shortCode}/update`, "POST", {
+			cookies: { "__Host-sid": sessionId },
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ alias: "kv-tgt-alias" }),
+		}));
+
+		expect(await linksKvMock.get("link:kv-tgt-alias")).toBeNull();
+	});
+
+	it("löscht KV-Eintrag auch bei reinem title-Update", async () => {
+		const { sessionId, userId } = await seedSession(env.hello_cf_spa_db);
+		const { shortCode } = await seedLink(env.hello_cf_spa_db, { userId, shortCode: "kv-upd-title" });
+		await linksKvMock.put(`link:${shortCode}`, JSON.stringify({ target_url: "https://example.com", is_active: 1, status: "active" }));
+
+		await call(makeRequest(`${BASE}/api/links/${shortCode}/update`, "POST", {
+			cookies: { "__Host-sid": sessionId },
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ title: "Neuer Titel" }),
+		}));
+
+		expect(await linksKvMock.get(`link:${shortCode}`)).toBeNull();
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // POST /api/links – additional edge cases
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -2280,16 +2368,111 @@ describe("POST /api/links – SSRF protection", () => {
 		expect(res.status).toBe(400);
 	});
 
-	it("returns 400 for a private 10.x IP", async () => {
-		const { sessionId } = await seedSession(env.hello_cf_spa_db);
-		const res = await call(
-			makeRequest(`${BASE}/api/links`, "POST", {
-				cookies: { "__Host-sid": sessionId },
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ target_url: "http://10.0.0.1/internal" }),
-			})
-		);
-		expect(res.status).toBe(400);
-	});
+        it("returns 400 for a private 10.x IP", async () => {
+                const { sessionId } = await seedSession(env.hello_cf_spa_db);
+                const res = await call(
+                        makeRequest(`${BASE}/api/links`, "POST", {
+                                cookies: { "__Host-sid": sessionId },
+                                headers: { "content-type": "application/json" },
+                                body: JSON.stringify({ target_url: "http://10.0.0.1/internal" }),
+                        })
+                );
+                expect(res.status).toBe(400);
+        });
+});
+// ─────────────────────────────────────────────────────────────────────────────
+// scheduled – security_scans retention cleanup
+// ─────────────────────────────────────────────────────────────────────────────
+describe("scheduled – security_scans retention", () => {
+        async function insertScan(linkId: string, rawScore: number, daysAgo: number) {
+                await env.hello_cf_spa_db
+                        .prepare(
+                                "INSERT INTO security_scans (link_id, provider, raw_score, scanned_at) VALUES (?, 'heuristic', ?, datetime('now', ?))"
+                        )
+                        .bind(linkId, rawScore, `-${daysAgo} days`)
+                        .run();
+        }
+
+        async function countScans(): Promise<number> {
+                const row = await env.hello_cf_spa_db
+                        .prepare("SELECT COUNT(*) AS n FROM security_scans")
+                        .first<{ n: number }>();
+                return row?.n ?? 0;
+        }
+
+        async function runScheduled() {
+                const ctx = createExecutionContext();
+                await worker.scheduled({} as ScheduledController, env as any, ctx);
+                await waitOnExecutionContext(ctx);
+        }
+
+        it("deletes low-risk scans (score < 0.3) older than 7 days", async () => {
+                const { userId } = await seedSession(env.hello_cf_spa_db);
+                const { id: linkId } = await seedLink(env.hello_cf_spa_db, { userId, targetUrl: "https://example.com/1" });
+                await insertScan(linkId, 0.1, 8);  // should be deleted (8d > 7d)
+                await insertScan(linkId, 0.2, 6);  // should be kept (6d < 7d)
+
+                expect(await countScans()).toBe(2);
+                await runScheduled();
+                expect(await countScans()).toBe(1);
+
+                const remaining = await env.hello_cf_spa_db
+                        .prepare("SELECT raw_score FROM security_scans")
+                        .first<{ raw_score: number }>();
+                expect(remaining?.raw_score).toBe(0.2);
+        });
+
+        it("keeps low-risk scans (score < 0.3) younger than 7 days", async () => {
+                const { userId } = await seedSession(env.hello_cf_spa_db);
+                const { id: linkId } = await seedLink(env.hello_cf_spa_db, { userId, targetUrl: "https://example.com/2" });
+                await insertScan(linkId, 0.1, 3);  // 3d – should be kept
+
+                await runScheduled();
+                expect(await countScans()).toBe(1);
+        });
+
+        it("deletes high-risk scans (score >= 0.3) older than 90 days", async () => {
+                const { userId } = await seedSession(env.hello_cf_spa_db);
+                const { id: linkId } = await seedLink(env.hello_cf_spa_db, { userId, targetUrl: "https://example.com/3" });
+                await insertScan(linkId, 0.8, 91);  // should be deleted
+                await insertScan(linkId, 0.5, 89);  // should be kept
+
+                expect(await countScans()).toBe(2);
+                await runScheduled();
+                expect(await countScans()).toBe(1);
+
+                const remaining = await env.hello_cf_spa_db
+                        .prepare("SELECT raw_score FROM security_scans")
+                        .first<{ raw_score: number }>();
+                expect(remaining?.raw_score).toBe(0.5);
+        });
+
+        it("keeps high-risk scans (score >= 0.3) younger than 90 days", async () => {
+                const { userId } = await seedSession(env.hello_cf_spa_db);
+                const { id: linkId } = await seedLink(env.hello_cf_spa_db, { userId, targetUrl: "https://example.com/4" });
+                await insertScan(linkId, 0.9, 45);  // 45d – should be kept
+
+                await runScheduled();
+                expect(await countScans()).toBe(1);
+        });
+
+        it("does not delete scans at exactly the score boundary (score = 0.3 is high-risk)", async () => {
+                const { userId } = await seedSession(env.hello_cf_spa_db);
+                const { id: linkId } = await seedLink(env.hello_cf_spa_db, { userId, targetUrl: "https://example.com/5" });
+                await insertScan(linkId, 0.3, 8);   // score = 0.3 → high-risk → should NOT be deleted (only 8d < 90d)
+
+                await runScheduled();
+                expect(await countScans()).toBe(1);
+        });
+
+        it("leaves unrelated data intact", async () => {
+                const { userId } = await seedSession(env.hello_cf_spa_db);
+                const { id: linkId } = await seedLink(env.hello_cf_spa_db, { userId, targetUrl: "https://example.com/6" });
+                await insertScan(linkId, 0.1, 3);  // fresh low-risk – keep
+                await insertScan(linkId, 0.9, 45); // fresh high-risk – keep
+
+                await runScheduled();
+                expect(await countScans()).toBe(2);
+        });
 });
 

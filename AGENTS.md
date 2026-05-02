@@ -1,4 +1,4 @@
-﻿# Cloudflare Workers
+﻿﻿﻿# Cloudflare Workers
 
 STOP. Your knowledge of Cloudflare Workers APIs and limits may be outdated. Always retrieve current documentation before any Workers, KV, R2, D1, Durable Objects, Queues, Vectorize, AI, or Agents SDK task.
 
@@ -263,7 +263,7 @@ Status-Hierarchie (User-Intent vor System-Intent):
 
 KV-Update nach WÃ¤chter-Scan: `handleInternalScanResult` schreibt `LINKS_KV.put()` mit dem aktualisierten Payload (nicht `delete()` â€” `put()` propagiert sofort an alle Edges, verhindert Drift-Fenster beim Status-Downgrade z.B. `blocked â†’ warning`).
 
-Cache-Invalidierung nach User-Aktion: Toggle `is_active` und Inline-Edit `short_code` mÃ¼ssen `KV.delete` mitfÃ¼hren (noch TODO falls nicht bereits implementiert).
+Cache-Invalidierung nach User-Aktion: Toggle `is_active` und Inline-Edit `short_code` fÃ¼hren `KV.delete` mit (implementiert — `handleUpdateLink` und `handleDeleteLink` via `ctx.waitUntil`).
 
 **Bekanntes Risiko:** Maximaler Drift zwischen D1 und KV wenn `LINKS_KV` Binding nicht konfiguriert: Worker schlÃ¤gt fehl open (kein Crash). Maximaler TTL-Drift: 5 Minuten. FÃ¼r Spam-Schutz akzeptiert.
 

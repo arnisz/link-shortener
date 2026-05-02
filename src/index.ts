@@ -51,10 +51,10 @@ async function router(request: Request, env: Env, ctx: ExecutionContext): Promis
 	}
 
 	const updateMatch = pathname.match(/^\/api\/links\/([^/]+)\/update$/);
-	if (updateMatch && method === "POST") return handleUpdateLink(updateMatch[1], request, env);
+	if (updateMatch && method === "POST") return handleUpdateLink(updateMatch[1], request, env, ctx);
 
 	const deleteMatch = pathname.match(/^\/api\/links\/([^/]+)\/delete$/);
-	if (deleteMatch && method === "POST") return handleDeleteLink(deleteMatch[1], request, env);
+	if (deleteMatch && method === "POST") return handleDeleteLink(deleteMatch[1], request, env, ctx);
 
 	const redirectMatch = pathname.match(/^\/r\/([a-zA-Z0-9_-]+)$/);
 	if (redirectMatch && (method === "GET" || method === "HEAD"))
@@ -79,6 +79,8 @@ export default {
 	async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
 		const now = new Date().toISOString();
 		const BATCH = 1000; // delete in chunks to avoid long-running transactions
+
+		// ── 1. Expired anonymous links ────────────────────────────────────────
 		let deleted = 0;
 		let total = 0;
 		try {
@@ -97,6 +99,43 @@ export default {
 			else log("CLEANUP", `Cleanup finished, total deleted=${total}`);
 		} catch (e) {
 			log("CLEANUP_ERR", `Scheduled cleanup failed: ${String(e)}`);
+		}
+
+		// ── 2. security_scans retention ───────────────────────────────────────
+		// Low-risk scans (raw_score < 0.3): keep 7 days
+		// High-risk scans (raw_score >= 0.3): keep 90 days
+		try {
+			let scanDeleted = 0;
+			let scanTotal = 0;
+			do {
+				const res = await env.hello_cf_spa_db
+					.prepare(
+						"DELETE FROM security_scans WHERE id IN (SELECT id FROM security_scans WHERE raw_score < 0.3 AND scanned_at < datetime('now', '-7 days') LIMIT ?)"
+					)
+					.bind(BATCH)
+					.run();
+				scanDeleted = res.meta?.changes ?? 0;
+				scanTotal += scanDeleted;
+				if (scanDeleted > 0) log("CLEANUP", `Deleted ${scanDeleted} low-risk security_scans (>7d)`);
+			} while (scanDeleted === BATCH);
+
+			scanDeleted = 0;
+			do {
+				const res = await env.hello_cf_spa_db
+					.prepare(
+						"DELETE FROM security_scans WHERE id IN (SELECT id FROM security_scans WHERE raw_score >= 0.3 AND scanned_at < datetime('now', '-90 days') LIMIT ?)"
+					)
+					.bind(BATCH)
+					.run();
+				scanDeleted = res.meta?.changes ?? 0;
+				scanTotal += scanDeleted;
+				if (scanDeleted > 0) log("CLEANUP", `Deleted ${scanDeleted} high-risk security_scans (>90d)`);
+			} while (scanDeleted === BATCH);
+
+			if (scanTotal === 0) log("CLEANUP", "No stale security_scans found");
+			else log("CLEANUP", `security_scans cleanup finished, total deleted=${scanTotal}`);
+		} catch (e) {
+			log("CLEANUP_ERR", `security_scans cleanup failed: ${String(e)}`);
 		}
 	}
 };

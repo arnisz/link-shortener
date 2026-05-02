@@ -1,5 +1,68 @@
 # Status Log
 
+## 2026-05-02 — scheduled-Handler: security_scans Retention-Cleanup
+
+### Änderungen
+
+**Problem:** Der `scheduled`-Handler in `src/index.ts` bereinigt abgelaufene anonyme Links, hatte aber keinen Cleanup für `security_scans`. Laut Architektur sollen low-risk Scans (Score < 0.3) nach 7 Tagen und high-risk Scans (Score ≥ 0.3) nach 90 Tagen gelöscht werden.
+
+#### Implementierung
+
+- **`src/index.ts`** — `scheduled`-Handler um zweiten Cleanup-Block erweitert:
+  - Loop 1: `DELETE FROM security_scans WHERE raw_score < 0.3 AND scanned_at < datetime('now', '-7 days')` in 1000er-Batches
+  - Loop 2: `DELETE FROM security_scans WHERE raw_score >= 0.3 AND scanned_at < datetime('now', '-90 days')` in 1000er-Batches
+  - Fehler im security_scans-Cleanup werfen keinen Fehler im anonymous-links-Cleanup und umgekehrt (zwei unabhängige try/catch-Blöcke)
+
+#### Tests
+
+- **`test/index.spec.ts`** — 6 neue Tests im `describe("scheduled – security_scans retention")`:
+  - Low-risk (< 0.3) älter als 7d → gelöscht
+  - Low-risk jünger als 7d → bleibt
+  - High-risk (≥ 0.3) älter als 90d → gelöscht
+  - High-risk jünger als 90d → bleibt
+  - Grenzfall score = 0.3 → high-risk → bleibt (< 90d)
+  - Frische Einträge beider Klassen → beide bleiben
+
+### Tests
+
+- Alle **412 Tests** grün (8 Suites), vorher 406
+
+---
+
+## 2026-05-02 — KV-Cache-Invalidierung nach User-Mutationen
+
+### Änderungen
+
+**Problem:** `handleUpdateLink` und `handleDeleteLink` invalidierten den KV-Cache (`LINKS_KV`) nach erfolgreichen Mutationen nicht. Dadurch blieb ein gelöschter oder deaktivierter Link bis zu 5 Minuten lang über den Redirect erreichbar.
+
+**Ursache:** Beide Handler hatten keinen `ctx: ExecutionContext`-Parameter und riefen `LINKS_KV.delete()` nicht auf.
+
+#### Implementierung
+
+- **`src/handlers/links.ts`** — `handleDeleteLink`: ctx-Parameter ergänzt, `LINKS_KV.delete(`link:${code}`)` via `ctx.waitUntil(...)` nach erfolgreichem DELETE
+- **`src/handlers/links.ts`** — `handleUpdateLink`: ctx-Parameter ergänzt, `LINKS_KV.delete()` nach erfolgreichem UPDATE — invalidiert immer den alten Code; bei Alias-Änderung zusätzlich den neuen Code (falls dort ein veralteter Eintrag lag)
+- **`src/index.ts`** — Router übergibt `ctx` an beide Handler
+
+#### Verhalten
+
+| Mutation | KV-Aktion |
+|----------|-----------|
+| DELETE link | `delete(link:<code>)` |
+| UPDATE is_active, title, expires_at | `delete(link:<oldCode>)` |
+| UPDATE alias (short_code) | `delete(link:<oldCode>)` + `delete(link:<newCode>)` |
+
+#### Tests
+
+- **`test/index.spec.ts`** — 6 neue Tests in zwei `describe`-Blöcken:
+  - `KV-Cache-Invalidierung – DELETE`: KV-Eintrag nach delete entfernt; andere Codes unangetastet
+  - `KV-Cache-Invalidierung – UPDATE`: KV-Eintrag nach is_active-Toggle, Alias-Änderung (alter + neuer Code), title-Update jeweils entfernt
+
+### Tests
+
+- Alle **406 Tests** grün (8 Suites), vorher 400
+
+---
+
 ## 2026-05-01
 
 ### Planung: Wächter-Dienst (Architekturkonzept v4)

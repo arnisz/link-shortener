@@ -387,7 +387,7 @@ export async function handleGetLinks(request: Request, env: Env): Promise<Respon
 }
 
 /** POST /api/links/:code/update – updates title, alias, expires_at, and/or is_active. */
-export async function handleUpdateLink(code: string, request: Request, env: Env): Promise<Response> {
+export async function handleUpdateLink(code: string, request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 	const user = await getSessionUser(request, env);
 	if (!user) {
 		return errResponse("Unauthorized", 401);
@@ -580,6 +580,16 @@ export async function handleUpdateLink(code: string, request: Request, env: Env)
 		.bind(updated.id, user.id)
 		.all<{ name: string }>();
 
+	// KV-Cache invalidieren: alten Code immer löschen, neuen Code falls Alias geändert
+	if (env.LINKS_KV) {
+		const toDelete = [`link:${code}`];
+		if (body.alias !== undefined && typeof body.alias === "string") {
+			const newCode = normalizeAlias(body.alias);
+			if (newCode !== code) toDelete.push(`link:${newCode}`);
+		}
+		ctx.waitUntil(Promise.all(toDelete.map(k => env.LINKS_KV!.delete(k))));
+	}
+
 	return jsonResponse({
 		...updated,
 		tags: tagRows.results.map(r => r.name),
@@ -588,7 +598,7 @@ export async function handleUpdateLink(code: string, request: Request, env: Env)
 }
 
 /** POST /api/links/:code/delete – permanently removes a link owned by the user. */
-export async function handleDeleteLink(code: string, request: Request, env: Env): Promise<Response> {
+export async function handleDeleteLink(code: string, request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 	const user = await getSessionUser(request, env);
 	if (!user) {
 		return errResponse("Unauthorized", 401);
@@ -622,6 +632,11 @@ export async function handleDeleteLink(code: string, request: Request, env: Env)
 		`)
 		.bind(user.id, user.id)
 		.run();
+
+	// KV-Cache invalidieren
+	if (env.LINKS_KV) {
+		ctx.waitUntil(env.LINKS_KV.delete(`link:${code}`));
+	}
 
 	return jsonResponse({ ok: true });
 }

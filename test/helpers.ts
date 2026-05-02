@@ -7,9 +7,10 @@
 
 /**
  * Builds a syntactically valid (but cryptographically unsigned) Google ID
- * token that parseGoogleIdToken() in src/auth/google.ts can decode.
- * The signature segment is a fixed placeholder – it is never verified in the
- * worker code, only the payload is used.
+ * token. NOTE: parseGoogleIdToken() DOES verify the RS256 signature — tests
+ * that pass this token through the full OAuth callback flow will correctly
+ * receive a 400 ("Public key not found for kid"). Use seedSession() directly
+ * to bypass OAuth in tests that don't need to exercise the callback handler.
  */
 export function buildFakeIdToken(payload: Record<string, unknown>, headerOverrides: Record<string, unknown> = {}): string {
 	const encode = (obj: unknown) =>
