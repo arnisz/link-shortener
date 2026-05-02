@@ -42,19 +42,45 @@ export async function handleInternalHealth(request: Request, env: Env): Promise<
 	return jsonResponse({ ok: true });
 }
 
-/** GET /api/internal/links/pending?limit=N — atomically claims unchecked/stale links */
+/** GET /api/internal/links/pending?limit=N&max_age_warning_h=H&max_age_active_d=D&max_age_blocked_d=D
+ * Atomically claims links for scanning using tiered revalidation priorities:
+ *   Prio 1: checked = 0 (never scanned)
+ *   Prio 2: status = 'warning', last_checked_at older than max_age_warning_h hours (default 24)
+ *   Prio 3: status = 'active',  last_checked_at older than max_age_active_d days  (default 14)
+ *   Prio 4: status = 'blocked', last_checked_at older than max_age_blocked_d days  (default 90)
+ * Within each priority: click_count DESC, last_checked_at ASC NULLS FIRST.
+ * manual_override = 1 links are always excluded.
+ */
 export async function handleInternalLinksPending(request: Request, env: Env): Promise<Response> {
 	const authError = await authAndRateLimit(request, env);
 	if (authError) return authError;
 
 	const url = new URL(request.url);
+
+	// Parse and validate limit
 	const limitParam = parseInt(url.searchParams.get("limit") ?? "50", 10);
 	const limit = Math.min(Math.max(1, isNaN(limitParam) ? 50 : limitParam), 100);
 
+	// Parse and validate tiered revalidation thresholds
+	const parseIntParam = (name: string, defaultVal: number, min: number, max: number): number | null => {
+		const raw = url.searchParams.get(name);
+		if (raw === null) return defaultVal;
+		const v = parseInt(raw, 10);
+		if (!Number.isInteger(v) || v < min || v > max) return null;
+		return v;
+	};
+
+	const maxAgeWarningH = parseIntParam("max_age_warning_h", 24, 1, 8760);
+	const maxAgeActiveD  = parseIntParam("max_age_active_d",  14, 1, 3650);
+	const maxAgeBlockedD = parseIntParam("max_age_blocked_d", 90, 1, 3650);
+
+	if (maxAgeWarningH === null) return errResponse("max_age_warning_h must be an integer between 1 and 8760", 400);
+	if (maxAgeActiveD  === null) return errResponse("max_age_active_d must be an integer between 1 and 3650",  400);
+	if (maxAgeBlockedD === null) return errResponse("max_age_blocked_d must be an integer between 1 and 3650", 400);
+
 	// Atomic claim: UPDATE … WHERE … RETURNING
-	// Selects unchecked (checked=0) or stale (last_checked_at < 30 days ago),
-	// not already claimed in the last 10 minutes, manual_override=0.
-	let links: { id: string; short_code: string; target_url: string; created_at: string }[] = [];
+	// Four priority tiers merged via CASE for ordering; all within a single atomic UPDATE.
+	let links: { id: string; short_code: string; target_url: string; created_at: string; click_count: number }[] = [];
 	try {
 		const result = await env.hello_cf_spa_db
 			.prepare(
@@ -63,15 +89,28 @@ export async function handleInternalLinksPending(request: Request, env: Env): Pr
 				 WHERE id IN (
 				   SELECT id FROM links
 				   WHERE manual_override = 0
-				     AND (checked = 0 OR last_checked_at < datetime('now', '-30 days'))
 				     AND (claimed_at IS NULL OR claimed_at < datetime('now', '-10 minutes'))
-				   ORDER BY created_at ASC
+				     AND (
+				       checked = 0
+				       OR (status = 'warning' AND (last_checked_at IS NULL OR last_checked_at < datetime('now', '-' || ? || ' hours')))
+				       OR (status = 'active'  AND (last_checked_at IS NULL OR last_checked_at < datetime('now', '-' || ? || ' days')))
+				       OR (status = 'blocked' AND (last_checked_at IS NULL OR last_checked_at < datetime('now', '-' || ? || ' days')))
+				     )
+				   ORDER BY
+				     CASE
+				       WHEN checked = 0 THEN 1
+				       WHEN status = 'warning' THEN 2
+				       WHEN status = 'active'  THEN 3
+				       ELSE 4
+				     END ASC,
+				     click_count DESC,
+				     last_checked_at ASC NULLS FIRST
 				   LIMIT ?
 				 )
-				 RETURNING id, short_code, target_url, created_at`
+				 RETURNING id, short_code, target_url, created_at, click_count`
 			)
-			.bind(limit)
-			.all<{ id: string; short_code: string; target_url: string; created_at: string }>();
+			.bind(maxAgeWarningH, maxAgeActiveD, maxAgeBlockedD, limit)
+			.all<{ id: string; short_code: string; target_url: string; created_at: string; click_count: number }>();
 		links = result.results ?? [];
 	} catch (e) {
 		log("INTERNAL_ERR", `Failed to fetch pending links: ${String(e)}`);
@@ -138,8 +177,34 @@ export async function handleInternalScanResult(id: string, request: Request, env
 			.first<{ short_code: string; target_url: string; is_active: number; expires_at: string | null; user_id: string | null }>();
 
 		if (!updatedLink) {
-			// Link not found or manual_override = 1
-			log("INTERNAL", `scan-result: link id=${id} not found or manual_override=1`);
+			// Could be: link not found, or manual_override = 1.
+			// Distinguish by checking the DB explicitly.
+			const existing = await env.hello_cf_spa_db
+				.prepare(`SELECT manual_override FROM links WHERE id = ?`)
+				.bind(id)
+				.first<{ manual_override: number }>();
+			if (existing?.manual_override === 1) {
+				// Audit-trail: still insert security_scans even for override'd links
+				try {
+					const now = new Date().toISOString();
+					const insertStmts = body.scans.map(scan =>
+						env.hello_cf_spa_db
+							.prepare(
+								`INSERT INTO security_scans (link_id, provider, raw_score, raw_response, scanned_at)
+								 VALUES (?, ?, ?, ?, ?)`
+							)
+							.bind(id, scan.provider, scan.raw_score, scan.raw_response ?? null, now)
+					);
+					if (insertStmts.length > 0) {
+						await env.hello_cf_spa_db.batch(insertStmts);
+					}
+				} catch (e) {
+					log("INTERNAL_ERR", `Failed to insert security_scans for manual_override link ${id}: ${String(e)}`);
+				}
+				log("INTERNAL", `scan-result: link id=${id} manual_override=1, status not updated`);
+				return jsonResponse({ ok: true, applied: false, reason: "manual_override" });
+			}
+			log("INTERNAL", `scan-result: link id=${id} not found`);
 			return errResponse("Not found", 404);
 		}
 		short_code = updatedLink.short_code;
@@ -225,7 +290,7 @@ export async function handleInternalMetrics(request: Request, env: Env): Promise
 	if (authError) return authError;
 
 	try {
-		const [queueRow, scansRow, distRows] = await env.hello_cf_spa_db.batch([
+		const [queueRow, scansRow, distRows, agingRows] = await env.hello_cf_spa_db.batch([
 			env.hello_cf_spa_db.prepare(
 				`SELECT COUNT(*) as count FROM links WHERE checked = 0 AND claimed_at IS NULL`
 			),
@@ -234,6 +299,20 @@ export async function handleInternalMetrics(request: Request, env: Env): Promise
 			),
 			env.hello_cf_spa_db.prepare(
 				`SELECT status, COUNT(*) as count FROM links GROUP BY status`
+			),
+			env.hello_cf_spa_db.prepare(
+				`SELECT
+				   status,
+				   COUNT(*) FILTER (WHERE last_checked_at IS NULL)                                              AS never_scanned,
+				   COUNT(*) FILTER (WHERE last_checked_at > datetime('now', '-1 day'))                        AS fresh_lt_24h,
+				   COUNT(*) FILTER (WHERE last_checked_at > datetime('now', '-7 days'))                       AS fresh_lt_7d,
+				   COUNT(*) FILTER (WHERE last_checked_at BETWEEN datetime('now', '-14 days')
+				                                            AND datetime('now', '-7 days'))                   AS stale_7d_to_14d,
+				   COUNT(*) FILTER (WHERE last_checked_at < datetime('now', '-14 days'))                      AS overdue_gt_14d,
+				   COUNT(*) FILTER (WHERE last_checked_at < datetime('now', '-90 days'))                      AS overdue_gt_90d
+				 FROM links
+				 WHERE manual_override = 0
+				 GROUP BY status`
 			),
 		]);
 
@@ -245,11 +324,44 @@ export async function handleInternalMetrics(request: Request, env: Env): Promise
 			status_distribution[row.status] = row.count;
 		}
 
+		type AgingRow = {
+			status: string;
+			never_scanned: number;
+			fresh_lt_24h: number;
+			fresh_lt_7d: number;
+			stale_7d_to_14d: number;
+			overdue_gt_14d: number;
+			overdue_gt_90d: number;
+		};
+		const revalidation_aging: Record<string, Record<string, number>> = {};
+		for (const row of (agingRows.results ?? []) as AgingRow[]) {
+			if (row.status === "active") {
+				revalidation_aging.active = {
+					never_scanned:  row.never_scanned,
+					fresh_lt_7d:    row.fresh_lt_7d,
+					stale_7d_to_14d: row.stale_7d_to_14d,
+					overdue_gt_14d: row.overdue_gt_14d,
+				};
+			} else if (row.status === "warning") {
+				revalidation_aging.warning = {
+					never_scanned:  row.never_scanned,
+					fresh_lt_24h:   row.fresh_lt_24h,
+					overdue_gt_24h: Math.max(0, (status_distribution.warning ?? 0) - row.fresh_lt_24h - row.never_scanned),
+				};
+			} else if (row.status === "blocked") {
+				revalidation_aging.blocked = {
+					fresh_lt_90d:   Math.max(0, (status_distribution.blocked ?? 0) - row.overdue_gt_90d),
+					overdue_gt_90d: row.overdue_gt_90d,
+				};
+			}
+		}
+
 		return jsonResponse({
 			queue_depth,
 			links_scanned_24h,
 			status_distribution,
 			provider_quota_status: {},
+			revalidation_aging,
 		});
 	} catch (e) {
 		log("INTERNAL_ERR", `Failed to fetch metrics: ${String(e)}`);

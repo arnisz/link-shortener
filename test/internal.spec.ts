@@ -89,13 +89,15 @@ async function seedHexLink(opts: {
 	status?: string;
 	manualOverride?: number;
 	claimedAt?: string | null;
+	lastCheckedAt?: string | null;
+	clickCount?: number;
 }): Promise<{ id: string; shortCode: string }> {
 	const id = hexId();
 	const now = new Date().toISOString();
 	await env.hello_cf_spa_db
 		.prepare(
-			`INSERT INTO links (id, user_id, short_code, target_url, title, created_at, updated_at, click_count, expires_at, is_active, checked, status, manual_override, claimed_at)
-			 VALUES (?, ?, ?, ?, NULL, ?, ?, 0, NULL, 1, ?, ?, ?, ?)`
+			`INSERT INTO links (id, user_id, short_code, target_url, title, created_at, updated_at, click_count, expires_at, is_active, checked, status, manual_override, claimed_at, last_checked_at)
+			 VALUES (?, ?, ?, ?, NULL, ?, ?, ?, NULL, 1, ?, ?, ?, ?, ?)`
 		)
 		.bind(
 			id,
@@ -103,10 +105,12 @@ async function seedHexLink(opts: {
 			opts.shortCode,
 			opts.targetUrl ?? "https://example.com",
 			now, now,
+			opts.clickCount ?? 0,
 			opts.checked ?? 0,
 			opts.status ?? "active",
 			opts.manualOverride ?? 0,
-			opts.claimedAt ?? null
+			opts.claimedAt ?? null,
+			opts.lastCheckedAt ?? null
 		)
 		.run();
 	return { id, shortCode: opts.shortCode };
@@ -165,16 +169,18 @@ describe("GET /api/internal/links/pending", () => {
 			userId,
 			shortCode: "pending1",
 			checked: 0,
+			clickCount: 7,
 		});
 
 		const res = await call(bearerRequest("/api/internal/links/pending"));
 		expect(res.status).toBe(200);
-		const data = await res.json<{ links: { id: string; short_code: string; target_url: string; created_at: string }[] }>();
+		const data = await res.json<{ links: { id: string; short_code: string; target_url: string; created_at: string; click_count: number }[] }>();
 		expect(data.links.length).toBe(1);
 		expect(data.links[0].id).toBe(id);
 		expect(data.links[0].short_code).toBe("pending1");
 		expect(data.links[0].target_url).toBe("https://example.com");
 		expect(typeof data.links[0].created_at).toBe("string");
+		expect(data.links[0].click_count).toBe(7);
 
 		// Verify claimed_at was set in DB
 		const row = await env.hello_cf_spa_db
@@ -218,10 +224,13 @@ describe("GET /api/internal/links/pending", () => {
 
 	it("does not return already-checked links (unless stale)", async () => {
 		const { userId } = await seedSession(env.hello_cf_spa_db);
+		// Use a recent last_checked_at so the link is not considered stale by any tier
+		const recentTime = new Date(Date.now() - 60 * 60 * 1000).toISOString().replace("T", " ").replace("Z", "");
 		await seedHexLink({
 			userId,
 			shortCode: "checked1",
 			checked: 1,
+			lastCheckedAt: recentTime,
 		});
 
 		const res = await call(bearerRequest("/api/internal/links/pending"));
@@ -247,6 +256,87 @@ describe("GET /api/internal/links/pending", () => {
 		const res = await call(bearerRequest("/api/internal/links/pending?limit=999"));
 		expect(res.status).toBe(200);
 		// Should not crash — just returns up to 100
+	});
+
+	it("returns 400 for max_age_warning_h = 0 (out of range)", async () => {
+		const res = await call(bearerRequest("/api/internal/links/pending?max_age_warning_h=0"));
+		expect(res.status).toBe(400);
+	});
+
+	it("returns 400 for max_age_active_d = 9999 (out of range)", async () => {
+		const res = await call(bearerRequest("/api/internal/links/pending?max_age_active_d=9999"));
+		expect(res.status).toBe(400);
+	});
+
+	it("returns 400 for max_age_blocked_d = -1 (out of range)", async () => {
+		const res = await call(bearerRequest("/api/internal/links/pending?max_age_blocked_d=-1"));
+		expect(res.status).toBe(400);
+	});
+
+	it("returns 400 for non-integer max_age_warning_h", async () => {
+		const res = await call(bearerRequest("/api/internal/links/pending?max_age_warning_h=abc"));
+		expect(res.status).toBe(400);
+	});
+
+	it("prioritises checked=0 (Prio 1) over warning/active/blocked (Prio 2-4)", async () => {
+		const { userId } = await seedSession(env.hello_cf_spa_db);
+		// A warning link that is overdue (last_checked_at 48h ago)
+		const oldTime = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString().replace("T", " ").replace("Z", "");
+		const { id: warningId } = await seedHexLink({
+			userId, shortCode: "prio-warning", checked: 1, status: "warning", lastCheckedAt: oldTime, clickCount: 100,
+		});
+		// An unchecked link with lower click_count
+		const { id: newId } = await seedHexLink({
+			userId, shortCode: "prio-new", checked: 0, status: "active", clickCount: 1,
+		});
+
+		const res = await call(bearerRequest("/api/internal/links/pending?limit=1&max_age_warning_h=1"));
+		expect(res.status).toBe(200);
+		const data = await res.json<{ links: { id: string }[] }>();
+		// Prio 1 (checked=0) must come before Prio 2 (warning overdue)
+		expect(data.links[0].id).toBe(newId);
+		// warningId must not be in this batch (limit=1)
+		expect(data.links.map(l => l.id)).not.toContain(warningId);
+	});
+
+	it("returns warning links due for re-scan (Prio 2) when checked=0 queue is empty", async () => {
+		const { userId } = await seedSession(env.hello_cf_spa_db);
+		const oldTime = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString().replace("T", " ").replace("Z", "");
+		const { id } = await seedHexLink({
+			userId, shortCode: "warn-recheck", checked: 1, status: "warning", lastCheckedAt: oldTime,
+		});
+
+		const res = await call(bearerRequest("/api/internal/links/pending?max_age_warning_h=1"));
+		expect(res.status).toBe(200);
+		const data = await res.json<{ links: { id: string }[] }>();
+		expect(data.links.map(l => l.id)).toContain(id);
+	});
+
+	it("does not return warning links that were checked recently (within threshold)", async () => {
+		const { userId } = await seedSession(env.hello_cf_spa_db);
+		const recentTime = new Date(Date.now() - 30 * 60 * 1000).toISOString().replace("T", " ").replace("Z", "");
+		await seedHexLink({
+			userId, shortCode: "warn-fresh", checked: 1, status: "warning", lastCheckedAt: recentTime,
+		});
+
+		// threshold = 24h, link only 30min old → should NOT be returned
+		const res = await call(bearerRequest("/api/internal/links/pending?max_age_warning_h=24"));
+		expect(res.status).toBe(200);
+		const data = await res.json<{ links: unknown[] }>();
+		expect(data.links).toEqual([]);
+	});
+
+	it("sorts within same priority by click_count DESC", async () => {
+		const { userId } = await seedSession(env.hello_cf_spa_db);
+		const { id: lowId }  = await seedHexLink({ userId, shortCode: "click-low",  checked: 0, clickCount: 5  });
+		const { id: highId } = await seedHexLink({ userId, shortCode: "click-high", checked: 0, clickCount: 99 });
+
+		const res = await call(bearerRequest("/api/internal/links/pending?limit=1"));
+		expect(res.status).toBe(200);
+		const data = await res.json<{ links: { id: string }[] }>();
+		// Higher click_count must come first
+		expect(data.links[0].id).toBe(highId);
+		expect(data.links.map(l => l.id)).not.toContain(lowId);
 	});
 });
 
@@ -348,21 +438,40 @@ describe("POST /api/internal/links/:id/scan-result", () => {
 		expect(cached.status).toBe("blocked");
 	});
 
-	it("returns 404 for manual_override=1 links (Wächter darf nicht überschreiben)", async () => {
+	it("returns { ok, applied: false, reason: manual_override } for manual_override=1 links", async () => {
 		const { userId } = await seedSession(env.hello_cf_spa_db);
 		const { id } = await seedHexLink({
 			userId,
 			shortCode: "override2",
 			checked: 0,
+			status: "active",
 			manualOverride: 1,
 		});
 
 		const res = await call(bearerRequest(`/api/internal/links/${id}/scan-result`, "POST", VALID_TOKEN, {
-			aggregate_score: 0.5,
-			status: "active",
-			scans: [{ provider: "heuristic", raw_score: 0.5, raw_response: null }],
+			aggregate_score: 0.97,
+			status: "blocked",
+			scans: [{ provider: "heuristic", raw_score: 0.97, raw_response: null }],
 		}));
-		expect(res.status).toBe(404);
+		expect(res.status).toBe(200);
+		const data = await res.json<{ ok: boolean; applied: boolean; reason: string }>();
+		expect(data.ok).toBe(true);
+		expect(data.applied).toBe(false);
+		expect(data.reason).toBe("manual_override");
+
+		// links.status must be unchanged (still "active")
+		const row = await env.hello_cf_spa_db
+			.prepare("SELECT status FROM links WHERE id = ?")
+			.bind(id)
+			.first<{ status: string }>();
+		expect(row?.status).toBe("active");
+
+		// security_scans must still be inserted (audit-trail)
+		const scans = await env.hello_cf_spa_db
+			.prepare("SELECT COUNT(*) as count FROM security_scans WHERE link_id = ?")
+			.bind(id)
+			.first<{ count: number }>();
+		expect(scans?.count).toBe(1);
 	});
 
 	it("returns 400 for invalid aggregate_score > 1", async () => {
@@ -565,5 +674,58 @@ describe("GET /api/internal/metrics", () => {
 		expect(data.status_distribution.active).toBe(2);
 		expect(data.status_distribution.warning).toBe(1);
 		expect(data.status_distribution.blocked).toBe(1);
+	});
+
+	it("returns revalidation_aging in response structure", async () => {
+		const res = await call(bearerRequest("/api/internal/metrics"));
+		expect(res.status).toBe(200);
+		const data = await res.json<{ revalidation_aging: unknown }>();
+		expect(typeof data.revalidation_aging).toBe("object");
+	});
+
+	it("revalidation_aging.active counts never_scanned correctly", async () => {
+		const { userId } = await seedSession(env.hello_cf_spa_db);
+		// Two active links with no last_checked_at → never_scanned
+		await seedHexLink({ userId, shortCode: "ag1", checked: 1, status: "active", lastCheckedAt: null });
+		await seedHexLink({ userId, shortCode: "ag2", checked: 1, status: "active", lastCheckedAt: null });
+		// One active link with a recent last_checked_at → fresh
+		const recentTime = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString().replace("T", " ").replace("Z", "");
+		await seedHexLink({ userId, shortCode: "ag3", checked: 1, status: "active", lastCheckedAt: recentTime });
+
+		const res = await call(bearerRequest("/api/internal/metrics"));
+		expect(res.status).toBe(200);
+		const data = await res.json<{ revalidation_aging: { active: { never_scanned: number; fresh_lt_7d: number } } }>();
+		expect(data.revalidation_aging.active.never_scanned).toBe(2);
+		expect(data.revalidation_aging.active.fresh_lt_7d).toBeGreaterThanOrEqual(1);
+	});
+
+	it("revalidation_aging.warning counts overdue_gt_24h correctly", async () => {
+		const { userId } = await seedSession(env.hello_cf_spa_db);
+		// One fresh warning link (< 24h)
+		const recentTime = new Date(Date.now() - 60 * 60 * 1000).toISOString().replace("T", " ").replace("Z", "");
+		await seedHexLink({ userId, shortCode: "wag1", checked: 1, status: "warning", lastCheckedAt: recentTime });
+		// One overdue warning link (> 24h)
+		const oldTime = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString().replace("T", " ").replace("Z", "");
+		await seedHexLink({ userId, shortCode: "wag2", checked: 1, status: "warning", lastCheckedAt: oldTime });
+
+		const res = await call(bearerRequest("/api/internal/metrics"));
+		expect(res.status).toBe(200);
+		const data = await res.json<{ revalidation_aging: { warning: { fresh_lt_24h: number; overdue_gt_24h: number } } }>();
+		expect(data.revalidation_aging.warning.fresh_lt_24h).toBe(1);
+		expect(data.revalidation_aging.warning.overdue_gt_24h).toBe(1);
+	});
+
+	it("revalidation_aging excludes manual_override=1 links", async () => {
+		const { userId } = await seedSession(env.hello_cf_spa_db);
+		// manual_override=1 link — must NOT appear in aging histograms
+		await seedHexLink({ userId, shortCode: "mo1", checked: 1, status: "active", manualOverride: 1, lastCheckedAt: null });
+		// Regular active link
+		await seedHexLink({ userId, shortCode: "reg1", checked: 1, status: "active", lastCheckedAt: null });
+
+		const res = await call(bearerRequest("/api/internal/metrics"));
+		expect(res.status).toBe(200);
+		const data = await res.json<{ revalidation_aging: { active?: { never_scanned: number } } }>();
+		// Only the regular link should count — manual_override=1 is excluded
+		expect(data.revalidation_aging.active?.never_scanned).toBe(1);
 	});
 });

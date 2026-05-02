@@ -320,3 +320,146 @@ Wenn der Wächter einen Link von `blocked` auf `warning` hochstuft, erschien fü
   2. **Alias reserved words** — `stats` ergänzt, Begründung dokumentiert.
   3. **Shared Database Consumers** — Expliziter Hinweis, dass diese D1 auch von einem externen Stats-/Paywall-Worker gelesen wird; Schema-Änderungen sind Breaking Changes.
   4. **Logging conventions** — Sicherheitsregeln: keine vollständigen Cookie-/Session-Werte loggen; bei Auth-Rejects `reason`-String mit-loggen.
+---
+
+## 2026-05-02 — Phase 6 Wächter-Integration: Tiered Revalidation, Manual Override Audit, revalidation_aging Metrics
+
+### Änderungen
+
+#### 6.1 — Tiered Revalidation in `handleInternalLinksPending`
+
+- **`src/handlers/internal.ts`** (`handleInternalLinksPending`): Pending-Query von einfachem `checked=0 OR last_checked_at < 30d` auf 4 Prioritätsklassen erweitert:
+  - Prio 1: `checked = 0` (neue Links, sofort scannen)
+  - Prio 2: `status = 'warning'`, `last_checked_at` älter als `max_age_warning_h` Stunden (Default 24h)
+  - Prio 3: `status = 'active'`, `last_checked_at` älter als `max_age_active_d` Tagen (Default 14d)
+  - Prio 4: `status = 'blocked'`, `last_checked_at` älter als `max_age_blocked_d` Tagen (Default 90d)
+- Schwellwerte kommen als Query-Parameter vom Wächter; Validierung im Worker (Grenzen: `1 ≤ h ≤ 8760`, `1 ≤ d ≤ 3650`), 400 bei ungültigen Werten
+- Sortierung innerhalb gleicher Prio-Klasse: `click_count DESC`, dann `last_checked_at ASC NULLS FIRST`
+- Response um `click_count` erweitert (war bereits `created_at` vorhanden)
+- Neue Migration `sql/links_phase6_revalidation_index.sql`: Index `idx_links_revalidation` auf `(status, last_checked_at, click_count)`
+
+#### 6.2 — Manual Override Audit-Response in `handleInternalScanResult`
+
+- **`src/handlers/internal.ts`** (`handleInternalScanResult`): Wenn `UPDATE … WHERE manual_override = 0` keine Zeile ändert, wird nun zwischen "Link nicht gefunden" und `manual_override = 1` unterschieden (SELECT auf `manual_override`)
+- Bei `manual_override = 1`: Response `{ ok: true, applied: false, reason: "manual_override" }` (200) statt bisheriger 404
+- `INSERT INTO security_scans` läuft auch für override'd Links durch — Audit-Trail vollständig erhalten
+
+#### 6.3 — `revalidation_aging` Histogramm in `handleInternalMetrics`
+
+- **`src/handlers/internal.ts`** (`handleInternalMetrics`): Neues SQL-Statement im D1-Batch, gruppiert nach `status`, zählt `never_scanned`, `fresh_lt_24h`, `fresh_lt_7d`, `stale_7d_to_14d`, `overdue_gt_14d`, `overdue_gt_90d` — `manual_override = 0`-Filter
+- Response enthält neues `revalidation_aging`-Objekt mit `active`, `warning`, `blocked` Unterobjekten
+- Operations-Signal: wenn `overdue_*` über mehrere Tage wächst, fällt der Wächter strukturell zurück
+
+### Tests
+
+- **`test/internal.spec.ts`**: 15 neue Tests (vorher 30, jetzt 44 in dieser Suite):
+  - `seedHexLink` um `lastCheckedAt` und `clickCount` erweitert
+  - `click_count` im bestehenden Pending-Test geprüft
+  - `does not return already-checked links (unless stale)`: `lastCheckedAt` auf "jetzt" gesetzt (sonst gilt `NULL` als stale in Prio 3-4)
+  - 4 Tests für Query-Parameter-Validierung (400 bei out-of-range)
+  - 4 Tests für Tiered Revalidation (Prio-Reihenfolge, warning-Schwellwert, frische Links, click_count-Sortierung)
+  - Manual Override: Response `{ ok, applied: false, reason }` + `links.status` unverändert + `security_scans` vorhanden
+  - 4 Tests für `revalidation_aging` (Struktur, `never_scanned`, `overdue_gt_24h`, `manual_override`-Ausschluss)
+- Alle **400 Tests** grün (8 Suites)
+
+---
+
+## 2026-05-02 — Architekturkonzept v5: Tiered Revalidation & Manual Override Audit
+
+### Konzeptionelle Weiterentwicklung (v4 → v5)
+
+Das Wächter-Konzept wurde auf v5 weiterentwickelt. Alle Änderungen betreffen ausschließlich Worker-seitige Logik und sind rückwärtskompatibel mit der bestehenden Wächter-API-Schnittstelle. Keine Breaking Changes am Kontrakt.
+
+#### Änderungen v4 → v5
+
+**§4.1 Pending-Query — Tiered Revalidation**
+
+Die bisherige Pending-Query fragt nur `checked = 0` ab (neue Links). Phase 6 erweitert auf vier Prioritätsklassen mit konfigurierbaren Schwellwerten:
+
+| Prio | Klasse | Default-Intervall |
+|------|--------|-------------------|
+| 0 | `manual_override = 1` | nie (per WHERE ausgeschlossen) |
+| 1 | `checked = 0` | sofort |
+| 2 | `status = 'warning'` | 24h |
+| 3 | `status = 'active'` | 14d |
+| 4 | `status = 'blocked'` | 90d |
+
+Schwellwerte sind nicht im Worker hartcodiert, sondern kommen als Query-Parameter (`max_age_warning_h`, `max_age_active_d`, `max_age_blocked_d`) vom Wächter. Validierung im Worker: positive Integer in sinnvollen Grenzen, sonst 400.
+
+Sortierung innerhalb gleicher Prio-Klasse: `click_count DESC` (Reichweite = Risiko-Multiplikator), dann `last_checked_at ASC NULLS FIRST`. Response enthält zusätzlich `click_count` und `created_at`.
+
+**§4.5 Re-Validation Policy**
+
+Formale Verteilung der Verantwortlichkeiten: Worker liefert Schwellwert-Defaults, Status-Sortierung, atomisches Claiming. Wächter überschreibt Schwellwerte via Query-Params, implementiert Jitter (±15% auf `max_age_*`), verwaltet Provider-Quotas.
+
+**§4.6 Verhalten bei `manual_override = 1`**
+
+Bisher: `UPDATE ... WHERE manual_override = 0` schlägt still fehl. Phase 6 ergänzt eine explizite Response:
+
+```json
+{ "ok": true, "applied": false, "reason": "manual_override" }
+```
+
+`INSERT INTO security_scans` läuft weiterhin durch — Audit-Trail bleibt für override'd Links vollständig erhalten. Ermöglicht späteres Admin-UI: "Manuell freigegeben, aber Provider würde als blocked einstufen."
+
+**§9.5 Metrics-Endpoint — revalidation_aging Histogramm**
+
+Bestehender Metrics-Endpoint wird um `revalidation_aging` erweitert: pro Status-Klasse eine Aufschlüsselung nach `never_scanned`, `fresh_*`, `stale_*`, `overdue_*`. Operations-Signal: wenn `overdue_*` über mehrere Tage wächst, fällt der Wächter strukturell zurück.
+
+---
+
+### Nächste Schritte — Phase 6 (Worker-Anteil)
+
+#### 6.1 — Pending-Query auf Tiered Revalidation erweitern
+
+**Datei:** `src/handlers/internal.ts` (`handleInternalLinksPending`)
+
+- Query-Parameter `limit`, `max_age_warning_h`, `max_age_active_d`, `max_age_blocked_d` aus URL lesen und validieren (positive Integer, Grenzen: `1 ≤ h ≤ 8760`, `1 ≤ d ≤ 3650`). Ungültige Werte → 400.
+- `UPDATE links SET claimed_at = datetime('now') WHERE id IN (SELECT ... ORDER BY ... LIMIT ?) RETURNING ...` auf 4-Prio-Klassen-Logik umstellen (alle vier `OR`-Zweige, `ORDER BY CASE ... END, click_count DESC, last_checked_at ASC NULLS FIRST`).
+- Response um `click_count` und `created_at` erweitern.
+- Migration `sql/links_phase6_revalidation_index.sql` anlegen: zusätzlichen Index auf `(status, last_checked_at, click_count)` prüfen ob D1 ihn nutzt; bestehender `idx_links_scan_queue (checked, last_checked_at, claimed_at)` bleibt erhalten.
+
+**Tests:** `test/internal.spec.ts` — bestehende Pending-Tests auf neuen Response-Shape anpassen + neue Tests für alle vier Prio-Klassen, Schwellwert-Validierung (400 bei out-of-range), Default-Werte, click_count-Sortierung.
+
+#### 6.2 — manual_override Audit-Response in scan-result
+
+**Datei:** `src/handlers/internal.ts` (`handleInternalScanResult`)
+
+- Nach dem D1-Batch prüfen: wenn `result.meta.changes === 0` auf dem `UPDATE links SET ...` → prüfen ob Link `manual_override = 1` hat (SELECT oder RETURNING erweitern).
+- Wenn ja: Response `{ ok: true, applied: false, reason: "manual_override" }` statt der bisherigen impliziten 0-rows-affected-Ignoranz.
+- `INSERT INTO security_scans` läuft in beiden Fällen durch — nicht in das `IF`-Gate einbeziehen.
+
+**Tests:** `test/internal.spec.ts` — neuer Test: Link mit `manual_override = 1`, POST scan-result → 200, `applied: false`, `reason: "manual_override"`, security_scans-Eintrag vorhanden, `links.status` unverändert.
+
+#### 6.3 — revalidation_aging Histogramm in Metrics
+
+**Datei:** `src/handlers/internal.ts` (`handleInternalMetrics`)
+
+SQL (als separates Statement im D1-Batch):
+
+```sql
+SELECT
+  status,
+  COUNT(*) FILTER (WHERE last_checked_at IS NULL)                      AS never_scanned,
+  COUNT(*) FILTER (WHERE last_checked_at > datetime('now', '-1 day'))  AS fresh_lt_24h,
+  COUNT(*) FILTER (WHERE last_checked_at > datetime('now', '-7 days')) AS fresh_lt_7d,
+  COUNT(*) FILTER (WHERE last_checked_at BETWEEN datetime('now', '-14 days')
+                                             AND datetime('now', '-7 days'))  AS stale_7d_to_14d,
+  COUNT(*) FILTER (WHERE last_checked_at < datetime('now', '-14 days'))       AS overdue_gt_14d,
+  COUNT(*) FILTER (WHERE last_checked_at < datetime('now', '-90 days'))       AS overdue_gt_90d
+FROM links
+WHERE manual_override = 0
+GROUP BY status;
+```
+
+Ergebnis in Response-Objekt `revalidation_aging` strukturiert nach Status-Klasse (active/warning/blocked).
+
+**Tests:** `test/internal.spec.ts` — Seed-Links mit unterschiedlichen `status` und `last_checked_at`, prüfen ob Histogramm-Buckets korrekt befüllt.
+
+#### 6.4 — Gesamtstatus Phase 6 nach Abschluss
+
+Wenn 6.1–6.3 implementiert und grün:
+- `status.md` Eintrag anlegen
+- `AGENTS.md` Phase-6-Markierung von `🔜 next` auf `✅ done` aktualisieren
+- Konzept `waechter-konzept.md` bleibt v5 (keine neuen Breaking Changes)
+- Wächter-Projekt kann mit dem aktualisierten Pending-Endpoint beginnen (Phase 2)
