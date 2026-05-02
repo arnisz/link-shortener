@@ -163,6 +163,24 @@ export async function handleCreateLink(request: Request, env: Env): Promise<Resp
 			? normalizeAlias(body.alias)
 			: "";
 
+	// 🔴 SICHERHEIT: URLhaus Static-Check für authentifizierte Links
+	if (env.LINKS_KV) {
+		try {
+			const hostname = targetValidation.url.hostname.toLowerCase();
+			const blockedHostsRaw = await env.LINKS_KV.get("urlhaus:blocked_hosts");
+			if (blockedHostsRaw) {
+				const blockedHosts = new Set(JSON.parse(blockedHostsRaw));
+				if (blockedHosts.has(hostname)) {
+					log("SECURITY", `URLhaus-Block: ${hostname} (auth)`);
+					return errResponse("URL nicht zulässig (Malware-Verdacht)", 422);
+				}
+			}
+		} catch (e) {
+			log("SECURITY_ERR", `URLhaus-Check fehlgeschlagen: ${e}`);
+			// Fails open
+		}
+	}
+
 	// Backpressure Schicht 3: Queue-Depth-Throttle
 	if (await checkQueueDepthThrottle(env.hello_cf_spa_db)) {
 		log("BACKPRESSURE", "Queue-Depth-Throttle ausgelöst (auth)");
@@ -642,6 +660,24 @@ export async function handleCreateAnonymousLink(request: Request, env: Env): Pro
 	const isSpam = await checkSpamFilter(targetUrl, env.hello_cf_spa_db);
 	if (isSpam) {
 		return errResponse("URL nicht zulässig", 422);
+	}
+
+	// 🔴 SICHERHEIT: URLhaus Static-Check (Datensparsamkeit: prüft nur Hostname gegen KV-Snapshot)
+	if (env.LINKS_KV) {
+		try {
+			const hostname = targetValidation.url.hostname.toLowerCase();
+			const blockedHostsRaw = await env.LINKS_KV.get("urlhaus:blocked_hosts");
+			if (blockedHostsRaw) {
+				const blockedHosts = new Set(JSON.parse(blockedHostsRaw));
+				if (blockedHosts.has(hostname)) {
+					log("SECURITY", `URLhaus-Block: ${hostname}`);
+					return errResponse("URL nicht zulässig (Malware-Verdacht)", 422);
+				}
+			}
+		} catch (e) {
+			log("SECURITY_ERR", `URLhaus-Check fehlgeschlagen: ${e}`);
+			// Fails open
+		}
 	}
 
 	const ip = request.headers.get("CF-Connecting-IP") ?? "127.0.0.1";

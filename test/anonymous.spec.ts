@@ -10,12 +10,14 @@
 import { env, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import worker from "../src/index";
-import { makeRequest, setupTestDb, setupLinksTable, setupSpamTable, setupRateLimitTable, setupTagsTables, createLinksKvMock, type LinksKvMock } from "./helpers";
+import { makeRequest, setupTestDb, setupLinksTable, setupSpamTable, setupRateLimitTable, setupTagsTables, createLinksKvMock, type LinksKvMock, setupClicksTable } from "./helpers";
+import { Env as AppEnv } from "../src/types";
+import { _resetSpamKeywordCache } from "../src/validation";
 
 const BASE = "https://example.com";
 const CLIENT_IP = "1.2.3.4";
 
-let linksKvMock: LinksKvMock;
+let linksKvMock: ReturnType<typeof createLinksKvMock>;
 
 // ── One-time schema setup ─────────────────────────────────────────────────────
 
@@ -24,10 +26,13 @@ beforeAll(async () => {
 	await setupLinksTable(env.hello_cf_spa_db);
 	await setupSpamTable(env.hello_cf_spa_db);
 	await setupRateLimitTable(env.hello_cf_spa_db);
+	await setupClicksTable(env.hello_cf_spa_db);
 	await setupTagsTables(env.hello_cf_spa_db);
+	_resetSpamKeywordCache(); // Ensure fresh state
+
 	// KV-Mock für alle Tests bereitstellen
 	linksKvMock = createLinksKvMock();
-	env.LINKS_KV = linksKvMock;
+	(env as any).LINKS_KV = linksKvMock;
 });
 
 // ── Clean mutable tables before each test ────────────────────────────────────
@@ -54,9 +59,16 @@ async function postAnonymous(targetUrl: string, ip = CLIENT_IP): Promise<Respons
 			},
 			body: JSON.stringify({ target_url: targetUrl }),
 		}),
-		env,
+		env as unknown as AppEnv,
 		ctx
 	);
+	await waitOnExecutionContext(ctx);
+	return res;
+}
+
+async function call(req: Request): Promise<Response> {
+	const ctx = createExecutionContext();
+	const res = await worker.fetch(req, env as unknown as AppEnv, ctx);
 	await waitOnExecutionContext(ctx);
 	return res;
 }
@@ -144,7 +156,7 @@ describe("POST /api/links/anonymous", () => {
 				},
 				body: JSON.stringify({}),
 			}),
-			env,
+			env as unknown as AppEnv,
 			ctx
 		);
 		await waitOnExecutionContext(ctx);
@@ -158,7 +170,7 @@ describe("POST /api/links/anonymous", () => {
 				headers: { "CF-Connecting-IP": CLIENT_IP },
 				body: "target_url=https://example.com",
 			}),
-			env,
+			env as unknown as AppEnv,
 			ctx
 		);
 		await waitOnExecutionContext(ctx);
@@ -192,7 +204,7 @@ describe("POST /api/links/anonymous", () => {
 		const ctx = createExecutionContext();
 		const redirectRes = await worker.fetch(
 			makeRequest(`${BASE}/r/${code}`),
-			env,
+			env as unknown as AppEnv,
 			ctx
 		);
 		await waitOnExecutionContext(ctx);

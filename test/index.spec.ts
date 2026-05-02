@@ -23,7 +23,8 @@ import {
 	vi,
 } from "vitest";
 import worker from "../src/index";
-import { makeRequest, buildFakeIdToken, setupTestDb, seedSession, setupLinksTable, seedLink, setupRateLimitTable, setupTagsTables, createLinksKvMock } from "./helpers";
+import { makeRequest, buildFakeIdToken, setupTestDb, seedSession, setupLinksTable, seedLink, setupRateLimitTable, setupTagsTables, createLinksKvMock, setupClicksTable } from "./helpers";
+import { Env as AppEnv } from "../src/types";
 
 const BASE = "https://example.com";
 
@@ -36,10 +37,11 @@ beforeAll(async () => {
 	await setupLinksTable(env.hello_cf_spa_db);
 	await setupRateLimitTable(env.hello_cf_spa_db);
 	await setupTagsTables(env.hello_cf_spa_db);
+	await setupClicksTable(env.hello_cf_spa_db);
 
 	// KV-Mock für alle Tests bereitstellen
 	linksKvMock = createLinksKvMock();
-	env.LINKS_KV = linksKvMock;
+	(env as any).LINKS_KV = linksKvMock;
 });
 
 // ── Clean DB state before every test ─────────────────────────────────────────
@@ -59,7 +61,7 @@ beforeEach(async () => {
 
 async function call(req: Request): Promise<Response> {
 	const ctx = createExecutionContext();
-	const res = await worker.fetch(req, env, ctx);
+	const res = await worker.fetch(req, env as unknown as AppEnv, ctx);
 	await waitOnExecutionContext(ctx);
 	return res;
 }
@@ -1894,7 +1896,7 @@ describe("CSRF protection on POST routes", () => {
 
 	it("returns 403 on anonymous link creation with foreign Origin", async () => {
 		const res = await call(
-			makeRequest(`${BASE}/api/links/anonymous`, "POST", {
+			makeRequest(`${BASE}/links/anonymous`, "POST", {
 				headers: {
 					"content-type": "application/json",
 					"Origin": "https://attacker.example.com",
@@ -2290,8 +2292,4 @@ describe("POST /api/links – SSRF protection", () => {
 		expect(res.status).toBe(400);
 	});
 });
-
-
-
-
 

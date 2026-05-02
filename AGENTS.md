@@ -97,8 +97,10 @@ All `/api/internal/*` routes are **machine-to-machine only** and authenticated v
 | POST | `/api/internal/links/:id/scan-result` | Writes aggregated score + status + per-provider audit rows (`:id` = `links.id`, 32-char hex, immutable) |
 | POST | `/api/internal/links/release-stale` | Releases claimed_at > 10 min (called on Wächter boot + every 5 min) |
 | GET | `/api/internal/metrics` | Queue depth, scans last 24h, status distribution, provider quota (optional, auth) |
+| POST | `/api/internal/kv/urlhaus` | Updates the URLhaus malicious host snapshot in KV (expects JSON array of strings, no dict wrapper) |
 | GET | `/warning?code=:code` | Interstitial page for `status='warning'` links |
 | GET | `/warning/proceed?code=:code&t=:token` | CSRF-token-protected bypass redirect for warning page |
+| POST | `/api/internal/kv/urlhaus` | Updates the URLhaus malicious host snapshot in KV (expects JSON array of strings) |
 
 ## Conventions
 
@@ -146,6 +148,19 @@ The following fields are stored in D1 and may be consumed by external workers. *
 | `links.user_id` | Foreign key → same format as `users.id`, or `NULL` for anonymous links | — | see above |
 | `links.created_at` / `links.updated_at` / `links.expires_at` | ISO-8601 same as sessions; `expires_at` is `NULL` for authenticated non-expiring links | `new Date().toISOString()` | `2026-04-29T18:33:00.123Z` |
 | `__Host-sid` cookie | Identical to `sessions.id` — 48-char lowercase hex | `randomId(24)` | `4fc38ab5e1d209ca3e16440648410a54b8dffddf1cbcec37` |
+
+### Wächter API Contracts
+
+The following names and values are part of the machine-to-machine contract between Worker and Guardian.
+
+| Category | Convention | Examples |
+|----------|------------|----------|
+| **Provider Names** | `snake_case` | `google_safe_browsing`, `heuristic`, `virustotal` |
+| **Status Values** | Lowercase string | `active`, `warning`, `blocked` |
+| **Score Range** | Float `0.0`–`1.0` | `0.0`, `1.0`, `0.83` |
+| **Link ID** | 32-char hex | `a3f8c1e9b2d4f6e8a1c3b5d7e9f2a4c6` |
+
+**Consumers must strictly follow these names.** The Worker's internal API (`/api/internal/*`) logic and database auditing rely on these exact strings.
 
 **Consumers must parse timestamps** with `new Date(expires_at) > new Date()` — not integer comparison.
 

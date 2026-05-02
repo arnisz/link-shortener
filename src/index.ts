@@ -1,7 +1,7 @@
 import type { Env } from "./types";
 import { handleGetMe, handleLogout, handleLogin, handleGoogleCallback } from "./handlers/auth";
 import { handleCreateLink, handleGetLinks, handleUpdateLink, handleDeleteLink, handleRedirect, handleCreateAnonymousLink } from "./handlers/links";
-import { handleInternalHealth, handleInternalLinksPending, handleInternalScanResult, handleInternalReleaseStale, handleInternalMetrics } from "./handlers/internal";
+import { handleInternalHealth, handleInternalLinksPending, handleInternalScanResult, handleInternalReleaseStale, handleInternalMetrics, handleInternalUpdateUrlhaus } from "./handlers/internal";
 import { handleWarning, handleWarningProceed } from "./handlers/warning";
 import { applySecurityHeaders, errResponse, log } from "./utils";
 import { validateCsrf } from "./csrf";
@@ -45,6 +45,9 @@ async function router(request: Request, env: Env, ctx: ExecutionContext): Promis
 	}
 	if (pathname === "/api/internal/metrics" && method === "GET") {
 		return handleInternalMetrics(request, env);
+	}
+	if (pathname === "/api/internal/kv/urlhaus" && method === "POST") {
+		return handleInternalUpdateUrlhaus(request, env);
 	}
 
 	const updateMatch = pathname.match(/^\/api\/links\/([^/]+)\/update$/);

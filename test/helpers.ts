@@ -291,6 +291,27 @@ export async function setupRateLimitTable(db: D1Database): Promise<void> {
 }
 
 /**
+ * Creates the clicks table (Phase 5).
+ */
+export async function setupClicksTable(db: D1Database): Promise<void> {
+	await db
+		.prepare(
+			`CREATE TABLE IF NOT EXISTS clicks (` +
+			`id INTEGER PRIMARY KEY AUTOINCREMENT, ` +
+			`ts INTEGER NOT NULL, ` +
+			`link_id TEXT NOT NULL REFERENCES links(id) ON DELETE CASCADE, ` +
+			`user_id TEXT, ` +
+			`country TEXT, ` +
+			`asn INTEGER, ` +
+			`asn_org TEXT, ` +
+			`referrer_host TEXT, ` +
+			`FOREIGN KEY (user_id) REFERENCES users(id))`
+		)
+		.run();
+	await db.prepare(`CREATE INDEX IF NOT EXISTS idx_clicks_link ON clicks(link_id)`).run();
+}
+
+/**
  * Creates the security_scans table in the test D1 database.
  */
 export async function setupSecurityScansTable(db: D1Database): Promise<void> {
@@ -348,6 +369,13 @@ export function createLinksKvMock() {
 		},
 		async delete(key: string) {
 			store.delete(key);
+		},
+		async list() {
+			return { keys: Array.from(store.keys()).map(k => ({ name: k })), list_complete: true, cursor: "" };
+		},
+		async getWithMetadata(key: string) {
+			const val = store.get(key);
+			return { value: val === undefined ? null : val, metadata: null };
 		},
 		reset() {
 			store.clear();

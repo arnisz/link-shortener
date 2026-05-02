@@ -270,6 +270,23 @@ Wenn der Wächter einen Link von `blocked` auf `warning` hochstuft, erschien fü
 
 ---
 
+## 2026-05-02 — Phase 1 Wächter-Integration: URLhaus Static-Check implementiert
+
+### Änderungen
+
+- **`src/handlers/links.ts`**: URLhaus Static-Check in `handleCreateLink` und `handleCreateAnonymousLink` integriert.
+- **Datensparsamkeit**: Der Check erfolgt rein lokal im Worker gegen einen Snapshot bösartiger Hostnames im Cloudflare KV-Store (`urlhaus:blocked_hosts`). Es findet kein externer Netzwerk-Call an URLhaus/abuse.ch während der Link-Erstellung statt.
+- **Speicher-Effizienz**: Alle bösartigen Hostnames werden als JSON-Set in einem einzigen KV-Key gespeichert, um im Cloudflare Free Tier (max. 100.000 Reads/Tag, aber nur 1.000 Writes/Monat) zu bleiben.
+- **Sicherheit**: Erkennt Malware-Links bereits synchron beim Erstellen (Static-Check), noch bevor der asynchrone Wächter-Scan läuft.
+
+## 2026-05-02 — API-Endpunkt für automatische URLhaus-Updates
+
+### Änderungen
+- **`src/handlers/internal.ts`**: Neuer Endpunkt `handleInternalUpdateUrlhaus` (`POST /api/internal/kv/urlhaus`).
+- **`src/index.ts`**: Route für den neuen API-Endpunkt im Router registriert.
+- **Zweck**: Erlaubt dem externen Wächter-Script (z.B. Python auf einem Raspberry Pi), die Liste der geblockten URLhaus-Hostnames automatisiert via HTTPS-API zu aktualisieren, ohne das Wrangler CLI nutzen zu müssen.
+- **Datenformat**: Erwartet Authentifizierung via `Authorization: Bearer <WAECHTER_TOKEN>` und einen rohen JSON-Array-Body als Payload (z.B. `["bad-domain.com", "evil.net"]`). Speichert diesen extrem effizient als einen einzigen JSON-Blob im KV-Schlüssel `urlhaus:blocked_hosts`.
+
 ## 2026-04-30
 
 ### Security: OAuth Open Redirect & Cookie Prefix Fixes

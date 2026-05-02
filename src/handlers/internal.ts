@@ -256,3 +256,41 @@ export async function handleInternalMetrics(request: Request, env: Env): Promise
 		return errResponse("Internal server error", 500);
 	}
 }
+
+/** POST /api/internal/kv/urlhaus — updates the URLhaus snapshot in KV */
+export async function handleInternalUpdateUrlhaus(request: Request, env: Env): Promise<Response> {
+	const authError = await authAndRateLimit(request, env);
+	if (authError) return authError;
+
+	if (!env.LINKS_KV) {
+		log("INTERNAL_ERR", "LINKS_KV binding not configured");
+		return errResponse("Internal server error (LINKS_KV missing)", 500);
+	}
+
+	let body: unknown;
+	try {
+		body = await request.json();
+	} catch {
+		return errResponse("Invalid JSON body", 400);
+	}
+
+	if (!Array.isArray(body)) {
+		return errResponse("Body must be an array of strings", 400);
+	}
+
+	// Validate it's an array of strings
+	for (const item of body) {
+		if (typeof item !== "string") {
+			return errResponse("Body must be an array of strings", 400);
+		}
+	}
+
+	try {
+		await env.LINKS_KV.put("urlhaus:blocked_hosts", JSON.stringify(body));
+		log("INTERNAL", `URLhaus snapshot updated with ${body.length} hosts`);
+		return jsonResponse({ ok: true, count: body.length });
+	} catch (e) {
+		log("INTERNAL_ERR", `Failed to update URLhaus KV: ${String(e)}`);
+		return errResponse("Internal server error", 500);
+	}
+}
