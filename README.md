@@ -1,65 +1,77 @@
-# aadd.li – Secure Serverless Open Source URL Shortener
+# aadd.li — Serverless Link Shortener
 
-**Official hosted instance:** [aadd.li](https://aadd.li)
+aadd.li is a performance-oriented, security-conscious, fully serverless URL shortener built on the Cloudflare developer platform using Cloudflare Workers, Cloudflare D1, and Cloudflare KV.
 
-aadd.li is a fast, privacy-focused open-source URL shortener built on Cloudflare Workers and Cloudflare D1.
+This repository is the open-source home of aadd.li. The public service at [aadd.li](https://aadd.li) runs on this codebase as its core URL shortener, with additional private modules used for hosted analytics and operational tooling.
 
-It provides a small, security-conscious alternative to heavy commercial link management tools. The project is designed for edge redirects, anonymous expiring links, session-based user management, and privacy-friendly analytics without storing IP addresses.
+The frontend is a lightweight Single Page Application served directly from the `public/` directory without the overhead of heavy web frameworks.
 
-## Why aadd.li?
+## Core Features
 
-aadd.li focuses on a simple architecture, strong security boundaries, and low operational overhead.
+- **Fast serverless redirects:** Low-latency redirects powered by Cloudflare Workers and a read-through KV caching layer.
+- **User management:** Google OAuth 2.0 authentication for user-based link management.
+- **Anonymous links:** Create short links without an account, with a hard 48-hour expiration.
+- **Custom aliases:** Authenticated users can claim human-readable short URLs.
+- **Hashtag system:** Organize links with up to 10 custom tags per URL.
 
-### Core features
+## Security & Threat Intelligence: The Guardian / Wächter
 
-- **Anonymous short links:** Create links without an account.
-- **Automatic expiration:** Anonymous links expire automatically, for example after 48 hours.
-- **User accounts:** Google OAuth login for managing permanent links and custom aliases.
-- **Edge-first redirects:** Runs on Cloudflare Workers for globally distributed redirects.
-- **Cloudflare D1 storage:** Serverless SQLite database with low operational complexity.
-- **Privacy-conscious analytics:** Click analytics without storing IP addresses.
-- **Abuse resistance:** Input validation, rate limiting, and safe redirect handling.
+aadd.li is designed to reduce abuse from spam, phishing, and malware through a two-tier security architecture.
 
-## Security
+### 1. Static check: first line of defense
 
-Security is a core design goal of aadd.li. The backend is covered by Vitest-based integration and security-focused tests.
+Newly created links are synchronously checked against a snapshot of known malicious domains, such as URLhaus-derived threat data stored in Cloudflare KV.
 
-Implemented protections include:
+Positive matches can be blocked before insertion into the database, without requiring heavyweight external lookups in the request path.
 
-- URL scheme validation and open redirect hardening
-- SSRF prevention checks
-- Atomic access-control checks to reduce TOCTOU risks
-- CSRF protection for session-based browser requests
-- HTML escaping utilities for XSS prevention
-- Secure `__Host-` session cookie usage
-- Rate limiting based on Cloudflare request metadata
-- Careful separation of anonymous, authenticated, and API-key based flows
+### 2. The Guardian: asynchronous scanner
 
-See [`SECURITY_PATCHES.md`](./SECURITY_PATCHES.md) for implementation notes.
+An external scanner, for example a Python service running on a Raspberry Pi, VPS, or dedicated host, can continuously fetch pending links via the `/api/internal/links/pending` API.
 
-## Technical stack
+The scanner can perform deeper checks outside the Cloudflare request path, including:
 
-- **Runtime:** Cloudflare Workers
+- revalidation of newly created links
+- repeated checks for links marked as `warning`
+- periodic revalidation of active links
+- Google Safe Browsing checks
+- heuristic URL analysis
+- optional antivirus scanning
+- aggregated threat scoring
+
+The scanner reports the resulting safety status back to the Worker.
+
+### Link status handling
+
+aadd.li supports different link safety states:
+
+- `active`: normal redirect flow
+- `warning`: redirect is intercepted by a warning page at `/warning`
+- `blocked`: redirect is denied with `404 Not Found`
+
+For warning pages, bypass events can be logged in a privacy-conscious way, for example without storing IP addresses.
+
+## Technology Stack
+
+- **Backend:** Cloudflare Workers, TypeScript, esbuild, Wrangler
 - **Database:** Cloudflare D1
-- **Language:** TypeScript
-- **Testing:** Vitest / Cloudflare Workers test environment
-- **Authentication:** Google OAuth with secure session cookies
-- **Architecture:** Serverless edge application with strict API boundaries
+- **Cache and threat lookup:** Cloudflare KV
+- **Testing:** Vitest with `@cloudflare/vitest-pool-workers`
+- **Frontend:** Vanilla HTML/CSS/JavaScript SPA
 
-## Use cases
+## Local Development
 
-aadd.li can be used as:
+Use the Wrangler CLI for local development and deployment:
 
-- a self-hostable URL shortener
-- a Cloudflare Workers reference project
-- a small SaaS architecture blueprint
-- a privacy-conscious link management backend
-- a foundation for browser extensions or productivity tools
+```bash
+# Install dependencies
+npm install
 
-## License
+# Initialize local D1 database schema
+npx wrangler d1 execute hello-cf-spa-db --local --file=sql/init.sql
+npx wrangler d1 execute hello-cf-spa-db --local --file=sql/auth.sql
+npx wrangler d1 execute hello-cf-spa-db --local --file=sql/links.sql
 
-This project is licensed under the GNU General Public License v3.0.
+# Run all remaining SQL migrations in the order documented in AGENTS.md
 
-See [`LICENSE`](./LICENSE) for the full license text and [`COPYRIGHT`](./COPYRIGHT) for third-party dependency details.
-
-© 2024–2026 Arnold Szathmary & Contributors
+# Start the local development server
+npx wrangler dev --env dev
