@@ -1,45 +1,65 @@
-# aadd.li – Secure & Serverless Open Source URL Shortener
+# aadd.li – Secure Serverless Open Source URL Shortener
 
-🚀 **Official Hosted Instance:** [aadd.li](https://aadd.li)
+**Official hosted instance:** [aadd.li](https://aadd.li)
 
-**aadd.li** is a lightning-fast, privacy-focused open-source URL shortener. Built entirely on a serverless edge architecture using Cloudflare Workers and D1, it provides a clean, secure, and production-ready alternative to bloated commercial link management tools.
+aadd.li is a fast, privacy-focused open-source URL shortener built on Cloudflare Workers and Cloudflare D1.
 
-Whether you need anonymous short links that expire automatically or a hardened backend for per-user link management, aadd.li is designed for simplicity and maximum security.
+It provides a small, security-conscious alternative to heavy commercial link management tools. The project is designed for edge redirects, anonymous expiring links, session-based user management, and privacy-friendly analytics without storing IP addresses.
 
-## 🌟 Why aadd.li? (Core Features)
+## Why aadd.li?
 
-We focus on robust architecture and privacy rather than feature bloat. The official instance at [aadd.li](https://aadd.li) showcases this hardened MVP:
+aadd.li focuses on a simple architecture, strong security boundaries, and low operational overhead.
 
-* **Privacy-First & Auto-Expiration:** Anonymous links expire automatically (e.g., after 48h), leaving no permanent trace.
-* **Secure User Management:** Google OAuth integration for session-based management, custom aliases, and permanent links.
-* **Edge-First Performance:** Zero cold starts and global low latency thanks to Cloudflare Workers.
-* **Abuse-Resistant:** Strict input validation, rate limiting, and safe redirect handling with proper HTTP status codes.
+### Core features
 
-## 🛡️ Enterprise-Grade Security (As of Mai 2026)
+- **Anonymous short links:** Create links without an account.
+- **Automatic expiration:** Anonymous links expire automatically, for example after 48 hours.
+- **User accounts:** Google OAuth login for managing permanent links and custom aliases.
+- **Edge-first redirects:** Runs on Cloudflare Workers for globally distributed redirects.
+- **Cloudflare D1 storage:** Serverless SQLite database with low operational complexity.
+- **Privacy-conscious analytics:** Click analytics without storing IP addresses.
+- **Abuse resistance:** Input validation, rate limiting, and safe redirect handling.
 
-Security isn't an afterthought. The backend is fully test-covered (Vitest) and hardened against common web vulnerabilities:
+## Security
 
-* **Open Redirect Protection:** Strict URL schema whitelisting and SSRF prevention.
-* **TOCTOU-Resistant Access Control:** Atomic permission checks prevent race conditions.
-* **XSS & CSRF Prevention:** Comprehensive HTML escaping utilities, Token-based + Legacy Origin checks for CSRF.
-* **Session Security:** Strict `__Host-` cookie prefixes.
-* **Rate Limiting:** Intelligent, CF-Connecting-IP aware throttling.
+Security is a core design goal of aadd.li. The backend is covered by Vitest-based integration and security-focused tests.
 
-> 📖 **See [SECURITY_PATCHES.md](./SECURITY_PATCHES.md)** for deep dives into our security implementation.
+Implemented protections include:
 
-## 💻 Technical Stack & Architecture
+- URL scheme validation and open redirect hardening
+- SSRF prevention checks
+- Atomic access-control checks to reduce TOCTOU risks
+- CSRF protection for session-based browser requests
+- HTML escaping utilities for XSS prevention
+- Secure `__Host-` session cookie usage
+- Rate limiting based on Cloudflare request metadata
+- Careful separation of anonymous, authenticated, and API-key based flows
 
-aadd.li requires no traditional server backend, making it highly scalable and cheap to operate. It serves as a perfect blueprint for modern SaaS applications, browser extensions, or productivity tools.
+See [`SECURITY_PATCHES.md`](./SECURITY_PATCHES.md) for implementation notes.
 
-* **Runtime:** Cloudflare Workers (Edge runtime)
-* **Database:** Cloudflare D1 (Serverless SQLite)
-* **API Design:** Clean, strict separation between frontend and a fully tested API.
-* **Security Context:** Nonce validation, strict input checks, zero information leaks.
+## Technical stack
 
-## 📄 License & Copyright
+- **Runtime:** Cloudflare Workers
+- **Database:** Cloudflare D1
+- **Language:** TypeScript
+- **Testing:** Vitest / Cloudflare Workers test environment
+- **Authentication:** Google OAuth with secure session cookies
+- **Architecture:** Serverless edge application with strict API boundaries
 
-This project is licensed under the **GNU General Public License v3 (GPLv3)**.
-See [LICENSE](./LICENSE) for the full license text and [COPYRIGHT](./COPYRIGHT) for third-party dependency details.
+## Use cases
 
-© 2024–2026 Arnold Szathmary & Contributors — Home of [aadd.li](https://aadd.li)
+aadd.li can be used as:
 
+- a self-hostable URL shortener
+- a Cloudflare Workers reference project
+- a small SaaS architecture blueprint
+- a privacy-conscious link management backend
+- a foundation for browser extensions or productivity tools
+
+## License
+
+This project is licensed under the GNU General Public License v3.0.
+
+See [`LICENSE`](./LICENSE) for the full license text and [`COPYRIGHT`](./COPYRIGHT) for third-party dependency details.
+
+© 2024–2026 Arnold Szathmary & Contributors
