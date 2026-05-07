@@ -360,7 +360,6 @@ export async function handleInternalMetrics(request: Request, env: Env): Promise
 			queue_depth,
 			links_scanned_24h,
 			status_distribution,
-			provider_quota_status: {},
 			revalidation_aging,
 		});
 	} catch (e) {

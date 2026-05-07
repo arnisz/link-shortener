@@ -636,12 +636,10 @@ describe("GET /api/internal/metrics", () => {
 			queue_depth: number;
 			links_scanned_24h: number;
 			status_distribution: Record<string, number>;
-			provider_quota_status: Record<string, unknown>;
 		}>();
 		expect(typeof data.queue_depth).toBe("number");
 		expect(typeof data.links_scanned_24h).toBe("number");
 		expect(typeof data.status_distribution).toBe("object");
-		expect(typeof data.provider_quota_status).toBe("object");
 	});
 
 	it("returns correct queue_depth (unchecked, unclaimed links)", async () => {

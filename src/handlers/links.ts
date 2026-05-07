@@ -1,11 +1,10 @@
 import type { Env } from "../types";
 import { TARGET_URL_MAX_LEN, TITLE_MAX_LEN, SHORT_CODE_GENERATION_RETRIES, TAG_MAX_PER_LINK, GLOBAL_INSERT_CAP, QUEUE_DEPTH_THROTTLE_LIMIT, QUEUE_DEPTH_CACHE_TTL_MS } from "../config";
-import { randomId, jsonResponse, errResponse, log } from "../utils";
+import { randomId, jsonResponse, errResponse, log, getCookie, sanitizeReferrer } from "../utils";
 import { generateShortCode, validateAlias, normalizeAlias, isValidFutureIso, requireJson, checkSpamFilter, validateTargetUrl, validateTag } from "../validation";
 import { checkRateLimit } from "../rateLimit";
 import { getSessionUser } from "../auth/session";
 import { validateCsrfToken, validateMutationCsrf } from "../csrf";
-import { getCookie, sanitizeReferrer } from "../utils";
 
 // ---------------------------------------------------------------------------
 // Backpressure: Modul-Scope-Cache für Queue-Depth-Throttle (Schicht 3)
@@ -791,10 +790,9 @@ export async function handleRedirect(code: string, env: Env, ctx: ExecutionConte
 				}
 				if (link.status === "warning") {
 					log("REDIRECT", `Warning: code=\"${code}\"`);
-					// Interstitial-Page (noch nicht implementiert)
-					return new Response(null, { status: 302, headers: { Location: `/warning?code=${code}` } });
+ 				return new Response(null, { status: 302, headers: { Location: `/warning?code=${code}` } });
 				}
-				if (link.expires_at !== null && new Date(link.expires_at).getTime() < Date.now()) {
+ 			if (link.expires_at != null && new Date(link.expires_at).getTime() < Date.now()) {
 					log("REDIRECT", `Expired: code=\"${code}\"`);
 					return errResponse("Short link not found", 404);
 				}

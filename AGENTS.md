@@ -18,7 +18,7 @@ For all limits and quotas, retrieve from the product's `/platform/limits/` page.
 - Auth: Google OAuth (`src/auth/google.ts`, `src/auth/session.ts`)
 - CSRF protection: `src/csrf.ts` (`validateCsrf`, `validateCsrfToken`, `generateCsrfToken`, `validateMutationCsrf`, `generateSignedToken`, `verifySignedToken`)
 - Rate limiting: `src/rateLimit.ts` (`checkRateLimit`, `extractClientIp`)
-- Shared helpers: `src/utils.ts` (`jsonResponse`, `errResponse`, `applySecurityHeaders`, `log`, `randomId`, `escapeHtml`, `getCookie`, `makeSessionCookie`, `clearSessionCookie`, `base64UrlDecode`)
+- Shared helpers: `src/utils.ts` (`jsonResponse`, `errResponse`, `applySecurityHeaders`, `log`, `randomId`, `escapeHtml`, `getCookie`, `makeSessionCookie`, `clearSessionCookie`, `base64UrlDecode`, `sanitizeReferrer`)
 - Constants/limits: `src/config.ts`
 - Input validation: `src/validation.ts` (`generateShortCode`, `isValidHttpUrl`, `validateTargetUrl`, `validateAlias`, `buildGeoUrl`, `isValidFutureIso`, `requireJson`, `checkSpamFilter`, `validateTag`, `_resetSpamKeywordCache`)
 - DB schema migrations: `sql/` (apply in order: `init.sql` â†’ `auth.sql` â†’ `links.sql` â†’ â€¦)
@@ -64,11 +64,11 @@ npx wrangler d1 execute hello-cf-spa-db --local --file=sql/rate_limits.sql
 npx wrangler d1 execute hello-cf-spa-db --local --file=sql/spam_filter.sql
 npx wrangler d1 execute hello-cf-spa-db --local --file=sql/spam-keywords-extended.sql
 npx wrangler d1 execute hello-cf-spa-db --local --file=sql/links_phase4_tags.sql
+npx wrangler d1 execute hello-cf-spa-db --local --file=sql/links_phase5_clicks.sql
 npx wrangler d1 execute hello-cf-spa-db --local --file=sql/links_phase6_security.sql
 npx wrangler d1 execute hello-cf-spa-db --local --file=sql/security_scans.sql
 npx wrangler d1 execute hello-cf-spa-db --local --file=sql/bypass_clicks.sql
-# Planned (Phase 6 â€” do not apply until implemented):
-# npx wrangler d1 execute hello-cf-spa-db --local --file=sql/links_phase6_revalidation_index.sql
+npx wrangler d1 execute hello-cf-spa-db --local --file=sql/links_phase6_revalidation_index.sql
 ```
 
 For remote (production): replace `--local` with `--remote`.
@@ -95,12 +95,6 @@ For remote (production): replace `--local` with `--remote`.
 | POST | `/api/internal/links/release-stale` | `handleInternalReleaseStale` â€” releases expired claims |
 | GET | `/api/internal/metrics` | `handleInternalMetrics` â€” queue depth, status distribution, scans 24h |
 | POST | `/api/internal/kv/urlhaus` | `handleInternalUpdateUrlhaus` â€” updates URLhaus blocked-host snapshot in KV |
-
-### Planned routes (Phase 6 â€” not yet implemented)
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/api/internal/metrics` | Extended with `revalidation_aging` histogram (Â§9.5 Konzept v5) |
 
 > All `/api/internal/*` routes are machine-to-machine only, authenticated via `Authorization: Bearer ${WAECHTER_TOKEN}`. Return a generic 401 on token mismatch. Rate-limit: 60 req/min per token.
 
@@ -189,6 +183,7 @@ Tests use `@cloudflare/vitest-pool-workers` (Miniflare). Shared utilities live i
 | `setupSpamTable(db)` | Creates `spam_keywords` table with seed keywords |
 | `setupRateLimitTable(db)` | Creates `rate_limits` table |
 | `setupSecurityScansTable(db)` | Creates `security_scans` table |
+| `setupClicksTable(db)` | Creates `clicks` table and indexes |
 | `setupBypassClicksTable(db)` | Creates `bypass_clicks` table |
 | `seedSession(db, opts?)` | Inserts a user + valid session; returns `{ userId, sessionId }` |
 | `seedLink(db, opts)` | Inserts a link row; returns `{ id, shortCode }`. Accepts Phase-6 fields: `checked`, `status`, `manualOverride`, `claimedAt` |
