@@ -122,7 +122,8 @@ export function validateCsrf(request: Request, env: Env): boolean {
  * Logik:
  * - Kein Origin Header → Non-Browser (curl, mobile) → erlaubt
  * - Foreign Origin → immer blockiert
- * - Same-Origin → erlaubt wenn X-CSRF-Token ODER X-Requested-With vorhanden
+ * - Same-Origin → zwingend gültiger X-CSRF-Token (HMAC der aktuellen Session) erforderlich
+ *   X-Requested-With ist kein gültiger Ersatz (Fix 9.5.26-2)
  */
 export function validateMutationCsrf(
 	request: Request,
@@ -135,14 +136,13 @@ export function validateMutationCsrf(
 		return errResponse("Invalid CSRF token", 403);
 	}
 
-	// Same-origin: Token ODER Legacy-Header erforderlich
-	const hasXRequestedWith = !!request.headers.get("X-Requested-With");
+	// Same-origin: zwingend gültiger, session-gebundener CSRF-Token erforderlich
 	const sid = getCookie(request, "__Host-sid");
 	const hasValidToken = sid
 		? validateCsrfToken(request, sid, env.SESSION_SECRET)
 		: false;
 
-	if (!hasValidToken && !hasXRequestedWith) {
+	if (!hasValidToken) {
 		return errResponse("Invalid CSRF token", 403);
 	}
 

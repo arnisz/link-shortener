@@ -25,6 +25,7 @@ import {
 import worker from "../src/index";
 import { makeRequest, buildFakeIdToken, setupTestDb, seedSession, setupLinksTable, seedLink, setupRateLimitTable, setupTagsTables, createLinksKvMock, setupClicksTable, setupSecurityScansTable } from "./helpers";
 import { Env as AppEnv } from "../src/types";
+import { generateCsrfToken } from "../src/csrf";
 
 const BASE = "https://example.com";
 
@@ -127,24 +128,32 @@ describe("/api/me", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("POST /logout", () => {
-	it("redirects to / with status 302", async () => {
+	// Kein Origin-Header → Non-Browser-Pfad → validateMutationCsrf greift nicht
+	it("redirects to / with status 302 (no Origin header)", async () => {
 		const res = await call(makeRequest(`${BASE}/logout`, "POST"));
 		expect(res.status).toBe(302);
 		expect(res.headers.get("location")).toBe("/");
 	});
 
-	it("clears the session cookie (Max-Age=0)", async () => {
+	it("clears the session cookie (Max-Age=0, no Origin header)", async () => {
 		const res = await call(makeRequest(`${BASE}/logout`, "POST"));
 		const cookie = res.headers.get("set-cookie") ?? "";
 		expect(cookie).toMatch(/(__Host-sid=|sid=)/);
 		expect(cookie).toContain("Max-Age=0");
 	});
 
-	it("deletes the session row from the DB", async () => {
+	it("deletes the session row from the DB when valid CSRF token is sent", async () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
+		const csrfToken = generateCsrfToken(sessionId, (env as unknown as AppEnv).SESSION_SECRET);
 
 		await call(
-			makeRequest(`${BASE}/logout`, "POST", { cookies: { "__Host-sid": sessionId } })
+			makeRequest(`${BASE}/logout`, "POST", {
+				cookies: { "__Host-sid": sessionId },
+				headers: {
+					"Origin": BASE,
+					"X-CSRF-Token": csrfToken,
+				},
+			})
 		);
 
 		const row = await env.hello_cf_spa_db
@@ -155,9 +164,63 @@ describe("POST /logout", () => {
 		expect(row).toBeNull();
 	});
 
-	it("redirects even when no session cookie is sent", async () => {
+	it("redirects even when no session cookie is sent (no Origin header)", async () => {
 		const res = await call(makeRequest(`${BASE}/logout`, "POST"));
 		expect(res.status).toBe(302);
+	});
+
+	// Fix 9.5.26-1: CSRF-Schutz für Logout
+	it("returns 403 when Origin is set but X-CSRF-Token is missing", async () => {
+		const { sessionId } = await seedSession(env.hello_cf_spa_db);
+
+		const res = await call(
+			makeRequest(`${BASE}/logout`, "POST", {
+				cookies: { "__Host-sid": sessionId },
+				headers: { "Origin": BASE },
+			})
+		);
+
+		expect(res.status).toBe(403);
+
+		// Session darf nicht gelöscht worden sein
+		const row = await env.hello_cf_spa_db
+			.prepare("SELECT id FROM sessions WHERE id = ?")
+			.bind(sessionId)
+			.first();
+		expect(row).not.toBeNull();
+	});
+
+	it("returns 403 when Origin is set and only X-Requested-With is sent (no CSRF token)", async () => {
+		const { sessionId } = await seedSession(env.hello_cf_spa_db);
+
+		const res = await call(
+			makeRequest(`${BASE}/logout`, "POST", {
+				cookies: { "__Host-sid": sessionId },
+				headers: {
+					"Origin": BASE,
+					"X-Requested-With": "XMLHttpRequest",
+				},
+			})
+		);
+
+		expect(res.status).toBe(403);
+	});
+
+	it("returns 403 when Origin is foreign", async () => {
+		const { sessionId } = await seedSession(env.hello_cf_spa_db);
+		const csrfToken = generateCsrfToken(sessionId, (env as unknown as AppEnv).SESSION_SECRET);
+
+		const res = await call(
+			makeRequest(`${BASE}/logout`, "POST", {
+				cookies: { "__Host-sid": sessionId },
+				headers: {
+					"Origin": "https://evil.example.com",
+					"X-CSRF-Token": csrfToken,
+				},
+			})
+		);
+
+		expect(res.status).toBe(403);
 	});
 });
 
@@ -1951,20 +2014,38 @@ describe("CSRF protection on POST routes", () => {
 		expect(res.status).toBe(403);
 	});
 
-	it("allows POST when Origin matches APP_BASE_URL and X-Requested-With is set", async () => {
+	it("allows POST when Origin matches APP_BASE_URL and valid X-CSRF-Token is set", async () => {
+		const { sessionId } = await seedSession(env.hello_cf_spa_db);
+		const csrfToken = generateCsrfToken(sessionId, (env as unknown as AppEnv).SESSION_SECRET);
+		const res = await call(
+			makeRequest(`${BASE}/api/links`, "POST", {
+				cookies: { "__Host-sid": sessionId },
+				headers: {
+					"content-type": "application/json",
+					"Origin": env.APP_BASE_URL,
+					"X-CSRF-Token": csrfToken,
+				},
+				body: JSON.stringify({ target_url: "https://csrf-allowed.example.com" }),
+			})
+		);
+		expect(res.status).toBe(201);
+	});
+
+	// Fix 9.5.26-2: X-Requested-With ist kein gültiger Ersatz für X-CSRF-Token
+	it("returns 403 when Origin matches APP_BASE_URL but only X-Requested-With is sent (no CSRF token)", async () => {
 		const { sessionId } = await seedSession(env.hello_cf_spa_db);
 		const res = await call(
 			makeRequest(`${BASE}/api/links`, "POST", {
 				cookies: { "__Host-sid": sessionId },
 				headers: {
 					"content-type": "application/json",
-					"Origin": env.APP_BASE_URL, // use actual env value (may come from .dev.vars)
+					"Origin": env.APP_BASE_URL,
 					"X-Requested-With": "XMLHttpRequest",
 				},
-				body: JSON.stringify({ target_url: "https://csrf-allowed.example.com" }),
+				body: JSON.stringify({ target_url: "https://csrf-xrw-rejected.example.com" }),
 			})
 		);
-		expect(res.status).toBe(201);
+		expect(res.status).toBe(403);
 	});
 
 	it("allows POST without Origin header (non-browser client / curl / tests)", async () => {

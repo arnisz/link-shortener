@@ -4,6 +4,7 @@
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+*.afdesign
 
 #keyword datenbank
 spam-keywords-extended.sql
@@ -184,3 +185,4 @@ dist
 .env*
 !.env.example
 .wrangler/
+.aider*

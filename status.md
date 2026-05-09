@@ -1,5 +1,94 @@
 # Status Log
 
+## 2026-05-09 — Implementierung: CSRF-Härtung Bugfix 9.5.26-1 + 9.5.26-2
+
+**Status:** implementiert ✅
+
+### Bugfix 9.5.26-1 — `fix(auth): require mutation CSRF validation for logout`
+
+#### Änderungen
+
+- **`src/handlers/auth.ts`**: `validateMutationCsrf` importiert; `handleLogout` ruft `validateMutationCsrf(request, env)` vor dem Session-Delete auf. Bei CSRF-Fehler wird die Fehler-Response sofort zurückgegeben, die Session bleibt erhalten.
+- **`test/index.spec.ts`**: `generateCsrfToken` importiert. Bestehende Logout-Tests angepasst (Beschreibungen präzisiert, "deletes session"-Test sendet jetzt gültigen CSRF-Token + Origin). 3 neue Tests:
+  - `POST /logout` mit Origin aber ohne X-CSRF-Token → 403, Session bleibt
+  - `POST /logout` mit Origin + nur X-Requested-With → 403
+  - `POST /logout` mit fremdem Origin → 403
+
+### Bugfix 9.5.26-2 — `fix(csrf): do not accept X-Requested-With as substitute for X-CSRF-Token`
+
+#### Änderungen
+
+- **`src/csrf.ts`**: `validateMutationCsrf` akzeptiert `X-Requested-With` nicht mehr als Ersatz für `X-CSRF-Token`. Same-Origin-Requests mit `Origin`-Header müssen zwingend einen gültigen, session-gebundenen CSRF-Token liefern.
+- **`test/index.spec.ts`**: CSRF-Test "allows POST when Origin matches APP_BASE_URL and X-Requested-With is set" auf gültigen CSRF-Token umgestellt. Neuer Test: "returns 403 when Origin matches APP_BASE_URL but only X-Requested-With is sent".
+- **`test/backpressure.spec.ts`**: `postAuthLink`-Helper auf CSRF-Token umgestellt (`generateCsrfToken` importiert, `X-Requested-With` durch `X-CSRF-Token` ersetzt).
+
+### Kompatibilität
+
+- Non-Browser-Requests ohne `Origin`-Header: weiterhin erlaubt (curl, Tests, mobile Apps)
+- Browser-Clients, die `GET /api/me` aufrufen und den `csrfToken` mitsenden: weiterhin funktionsfähig
+- `tags_search.spec.ts`: nicht betroffen (kein expliziter `Origin`-Header → Non-Browser-Pfad)
+
+### Tests
+
+- Alle bestehenden Tests angepasst; 3 neue Logout-Tests + 1 neuer CSRF-Test hinzugefügt
+- Test-Ausführung in dieser Umgebung nicht möglich (Windows: "access violation in the runtime" / veraltete Visual C++ Redistributable — pre-existing Problem)
+
+---
+
+## 2026-05-09 — Planung: CSRF-Härtung Bugfix 9.5.26-1 + 9.5.26-2
+
+**Status:** implementiert ✅ (siehe Eintrag oben)
+
+### Hintergrund
+
+Im Security Review wurden zwei bestätigte CSRF-bezogene Härtungspunkte identifiziert. Beide betreffen die Trennung zwischen dem globalen Router-Precheck (`validateCsrf`) und der stärkeren, sessiongebundenen Per-Handler-Validierung (`validateMutationCsrf`). Dieser Eintrag dokumentiert ausschließlich die offenen Bugfix-Aufgaben, damit ein späterer Implementierungs-Task die Änderungen ohne erneute Ursachenanalyse umsetzen kann.
+
+### Bugfix 9.5.26-1
+
+**Title:** `fix(auth): require mutation CSRF validation for logout`
+
+**Problem:** `POST /logout` ist browser-authentifiziert über das Cookie `__Host-sid` und führt eine serverseitige Zustandsänderung aus (`DELETE FROM sessions WHERE id = ?`), ruft aber im Gegensatz zu den anderen authentifizierten Mutation-Handlern `validateMutationCsrf(...)` nicht auf.
+
+**Risk:** Logout-CSRF / erzwungene Session-Invalidierung. Das ermöglicht keine Link-Erstellung, kein Update und kein Delete fremder Daten, verletzt aber die Projektregel, dass browser-authentifizierte Mutationen zusätzlich zur globalen Router-Prüfung eine Per-Handler-CSRF-Validierung verwenden sollen.
+
+**Expected fix:** `handleLogout(...)` muss vor dem Löschen der Session `validateMutationCsrf(request, env)` aufrufen. Wenn die CSRF-Prüfung fehlschlägt, muss die zurückgegebene CSRF-Fehler-Response sofort zurückgegeben werden und die Session darf nicht gelöscht werden.
+
+**Compatibility notes:** Bestehender Browser-Logout-Code muss künftig einen gültigen `X-CSRF-Token` mitsenden. Tests, die Logout nur mit `X-Requested-With` absichern, müssen bei der späteren Implementierung angepasst werden.
+
+**Suggested tests to add later:**
+
+- `POST /logout` mit gültiger Session und gültigem CSRF-Token erfolgreich; Session-Zeile wird gelöscht.
+- `POST /logout` mit gültigem `Origin`, aber ohne `X-CSRF-Token` → `403`.
+- `POST /logout` nur mit `X-Requested-With` → nach CSRF-Härtung `403`.
+- `POST /logout` ohne Session bleibt sicher und leakt keine zusätzlichen Informationen.
+
+### Bugfix 9.5.26-2
+
+**Title:** `fix(csrf): do not accept X-Requested-With as substitute for X-CSRF-Token`
+
+**Problem:** `validateMutationCsrf(...)` akzeptiert aktuell entweder einen gültigen CSRF-Token oder bloß die Existenz von `X-Requested-With`. Das schwächt die beabsichtigte, an die aktuelle Session gebundene CSRF-Schutzschicht.
+
+**Risk:** Der globale Router-CSRF-Precheck blockiert klassische Cross-Origin-Form-CSRF bereits, daher ist dies kein unmittelbarer Account-Takeover-Bug. Die Per-Handler-CSRF-Schicht soll jedoch einen stärkeren, kryptografisch an die aktuelle Session gebundenen Nachweis liefern. `X-Requested-With` als gleichwertigen Ersatz für einen echten Token zu behandeln, unterläuft dieses Design.
+
+**Expected fix:** Für browser-originierte Mutation-Requests mit `Origin`-Header muss `validateMutationCsrf(...)` künftig zwingend verlangen:
+
+- erlaubter `Origin`
+- vorhandenes `__Host-sid`-Cookie
+- gültiger `X-CSRF-Token`, der für genau diese Session erzeugt wurde
+
+`X-Requested-With` kann optional Teil des globalen Router-Level-Prechecks bleiben, darf aber `validateCsrfToken(...)` in `validateMutationCsrf(...)` nicht ersetzen.
+
+**Compatibility notes:** Browser-Clients, die bereits `GET /api/me` aufrufen und den gelieferten `X-CSRF-Token` mitsenden, sollten weiter funktionieren. Clients oder Tests, die sich bei authentifizierten Mutationen ausschließlich auf `X-Requested-With` verlassen, müssen während der späteren Implementierung angepasst werden.
+
+**Suggested tests to add later:**
+
+- Authentifizierte Mutation mit gültigem `Origin` und gültigem `X-CSRF-Token` erfolgreich.
+- Authentifizierte Mutation mit gültigem `Origin` und nur `X-Requested-With` → `403`.
+- Authentifizierte Mutation mit ungültigem `Origin` → Fehler.
+- Origin-lose Non-Browser-Requests verhalten sich weiterhin gemäß dokumentierter Projektpolicy.
+
+---
+
 ## 2026-05-02 — scheduled-Handler: security_scans Retention-Cleanup
 
 ### Änderungen

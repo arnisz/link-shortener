@@ -5,7 +5,7 @@ import { parseGoogleIdToken } from "../auth/google";
 import { upsertUserFromGoogle, createSession, getSessionUser } from "../auth/session";
 import { checkRateLimit } from "../rateLimit";
 import { errResponse } from "../utils";
-import { generateCsrfToken } from "../csrf";
+import { generateCsrfToken, validateMutationCsrf } from "../csrf";
 
 /** GET /api/me – returns the current user or { authenticated: false }. */
 export async function handleGetMe(request: Request, env: Env): Promise<Response> {
@@ -22,6 +22,10 @@ export async function handleGetMe(request: Request, env: Env): Promise<Response>
 
 /** POST /logout – clears session and redirects to /. */
 export async function handleLogout(request: Request, env: Env): Promise<Response> {
+	// 🔴 SICHERHEIT: Per-Handler CSRF-Validierung (Fix 9.5.26-1)
+	const csrfError = await validateMutationCsrf(request, env);
+	if (csrfError) return csrfError;
+
 	// 🔴 SICHERHEIT: Nur __Host-sid lesen – kein Fallback auf unsicheres sid-Cookie (Session-Fixation-Schutz)
 	const sid = getCookie(request, "__Host-sid");
 	if (sid) {

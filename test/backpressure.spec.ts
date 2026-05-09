@@ -28,6 +28,7 @@ import {
 import { GLOBAL_INSERT_CAP, QUEUE_DEPTH_THROTTLE_LIMIT } from "../src/config";
 import { _resetQueueDepthCache, _setQueueDepthCacheForTest } from "../src/handlers/links";
 import { _resetSpamKeywordCache } from "../src/validation";
+import { generateCsrfToken } from "../src/csrf";
 
 const BASE = "https://example.com";
 const CLIENT_IP = "1.2.3.4";
@@ -114,6 +115,7 @@ async function postAnonymous(targetUrl: string, ip = CLIENT_IP): Promise<Respons
 }
 
 async function postAuthLink(sessionId: string, targetUrl: string): Promise<Response> {
+	const csrfToken = generateCsrfToken(sessionId, (env as any).SESSION_SECRET);
 	const ctx = createExecutionContext();
 	const res = await worker.fetch(
 		makeRequest(`${BASE}/api/links`, "POST", {
@@ -121,7 +123,7 @@ async function postAuthLink(sessionId: string, targetUrl: string): Promise<Respo
 			headers: {
 				"content-type": "application/json",
 				"origin": BASE,
-				"x-requested-with": "XMLHttpRequest",
+				"X-CSRF-Token": csrfToken,
 			},
 			body: JSON.stringify({ target_url: targetUrl }),
 		}),
