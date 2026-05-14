@@ -77,9 +77,9 @@ async function router(request: Request, env: Env, ctx: ExecutionContext): Promis
 	if (adminUnblockMatch && method === "POST") return handleAdminUnblockUser(adminUnblockMatch[1], request, env);
 
 	const adminDeleteMatch = pathname.match(/^\/api\/admin\/users\/([0-9a-f]{32})$/);
-	if (adminDeleteMatch && method === "DELETE") return handleAdminDeleteUser(adminDeleteMatch[1], request, env);
+	if (adminDeleteMatch && method === "DELETE") return handleAdminDeleteUser(adminDeleteMatch[1], request, env, ctx);
 
-	const adminLinkUpdateMatch = pathname.match(/^\/api\/admin\/links\/([a-zA-Z0-9_-]+)$/);
+	const adminLinkUpdateMatch = pathname.match(/^\/api\/admin\/links\/([0-9a-f]{32})$/);
 	if (adminLinkUpdateMatch && method === "PATCH") return handleAdminUpdateLink(adminLinkUpdateMatch[1], request, env, ctx);
 	if (adminLinkUpdateMatch && method === "DELETE") return handleAdminDeleteLink(adminLinkUpdateMatch[1], request, env, ctx);
 

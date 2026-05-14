@@ -227,7 +227,9 @@ export async function seedLink(
 		lastScannedClickCount?: number;
 	}
 ): Promise<{ id: string; shortCode: string }> {
-	const id = `link-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+	const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
+		byte.toString(16).padStart(2, "0")
+	).join("");
 	const shortCode = opts.shortCode ?? "abc123";
 	const now = new Date().toISOString();
 

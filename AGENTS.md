@@ -107,9 +107,9 @@ For remote (production): replace `--local` with `--remote`.
 - **Session cookie** name is `__Host-sid`; managed via `makeSessionCookie` / `clearSessionCookie`. The `__Host-` prefix enforces Secure, Path=/, and no Domain attribute.
 - **CSRF â€” two-layer protection**:
 	1. Global: `validateCsrf(request, env)` in the router rejects cross-origin POSTs missing `X-Requested-With` (legacy layer, `src/csrf.ts`).
-	2. Per-handler: authenticated mutation endpoints (`handleCreateLink`, `handleUpdateLink`, `handleDeleteLink`) call `validateMutationCsrf(request, env)` which returns `Response | null`:
+	2. Per-handler: authenticated mutation endpoints (`handleLogout`, `handleCreateLink`, `handleUpdateLink`, `handleDeleteLink`, `handleAdminBlockUser`, `handleAdminUnblockUser`, `handleAdminDeleteUser`, `handleAdminUpdateLink`, `handleAdminDeleteLink`) call `validateMutationCsrf(request, env)` which returns `Response | null`:
 		- Foreign `Origin` header â†’ always rejected (403).
-		- Same-origin request with `Origin: APP_BASE_URL` â†’ requires either a valid `X-CSRF-Token` (HMAC-SHA256 of the session cookie value `__Host-sid`, via `validateCsrfToken`) **or** `X-Requested-With` header.
+		- Same-origin request with `Origin: APP_BASE_URL` â†’ requires a valid `X-CSRF-Token` (HMAC-SHA256 of the session cookie value `__Host-sid`, via `validateCsrfToken`). `X-Requested-With` is not accepted as a replacement in this per-handler layer.
 		- No `Origin` header (non-browser client) â†’ allowed.
 	- Clients must send `X-CSRF-Token: <token>` obtained from `generateCsrfToken(sessionId, secret)` where `sessionId` is the `__Host-sid` cookie value.
 - **Signed tokens** (`src/csrf.ts`): `generateSignedToken(subject, secret, ttlMs?)` / `verifySignedToken(token, subject, secret)` â€” HMAC-SHA256 + expiry timestamp, subject-separated. Used for Warning-Bypass-Tokens (`subject = "warning:<shortCode>"`). Reuses `SESSION_SECRET`; subject-separation prevents cross-replay with session CSRF tokens.
@@ -144,7 +144,8 @@ The following fields are stored in D1 and may be consumed by external workers. *
 | `sessions.user_id` | Foreign key â†’ same format as `users.id` | â€” | see above |
 | `sessions.expires_at` | ISO-8601 with milliseconds + `Z` suffix â€” **not** a Unix timestamp, **not** SQLite `datetime()` | `new Date(Date.now() + SESSION_DURATION_MS).toISOString()` | `2026-05-29T15:51:47.452Z` |
 | `sessions.created_at` | Same ISO-8601 format as `expires_at` | `new Date().toISOString()` | `2026-04-29T18:33:00.123Z` |
-| `links.id` | 6-char alphanumeric (`[a-zA-Z0-9]{6}`) â€” also used as `short_code` | `generateShortCode()` in `src/validation.ts` | `aB3xY9` |
+| `links.id` | 32-char lowercase hex, no dashes â€” `/^[0-9a-f]{32}$/` | `randomId(16)` in `src/utils.ts` | `a3f8c1e9b2d4f6e8a1c3b5d7e9f2a4c6` |
+| `links.short_code` | 6-char alphanumeric default (`[a-zA-Z0-9]{6}`) or user alias `3â€“50` chars (`[a-zA-Z0-9_-]+`) | `generateShortCode()` in `src/validation.ts` or validated user alias | `aB3xY9`, `campaign_2026` |
 | `links.user_id` | Foreign key â†’ same format as `users.id`, or `NULL` for anonymous links | â€” | see above |
 | `links.created_at` / `links.updated_at` / `links.expires_at` | ISO-8601 same as sessions; `expires_at` is `NULL` for authenticated non-expiring links | `new Date().toISOString()` | `2026-04-29T18:33:00.123Z` |
 | `__Host-sid` cookie | Identical to `sessions.id` â€” 48-char lowercase hex | `randomId(24)` | `4fc38ab5e1d209ca3e16440648410a54b8dffddf1cbcec37` |
@@ -248,7 +249,9 @@ Exportierte Handler:
 | `handleAdminGetUsers` | `GET /api/admin/users` | Alle User mit `link_count`, `is_blocked`, `created_at`, `email`. |
 | `handleAdminBlockUser` | `POST /api/admin/users/:id/block` | Setzt `is_blocked=1`, lÃ¶scht alle Sessions des Users (erzwingt Neu-Anmeldung). User-Datensatz und Links bleiben erhalten (User bleibt bekannt). |
 | `handleAdminUnblockUser` | `POST /api/admin/users/:id/unblock` | Setzt `is_blocked=0`. |
-| `handleAdminDeleteUser` | `DELETE /api/admin/users/:id` | LÃ¶scht User, alle Sessions und alle Links (CASCADE). Nicht rÃ¼ckgÃ¤ngig zu machen. |
+| `handleAdminDeleteUser` | `DELETE /api/admin/users/:id` | LÃ¶scht User, alle Sessions und alle Links (CASCADE) und schreibt KV-Tombstones fÃ¼r alle User-Links. Nicht rÃ¼ckgÃ¤ngig zu machen. |
+| `handleAdminUpdateLink` | `PATCH /api/admin/links/:id` | Aktualisiert `status` und/oder `spam_score` eines Links Ã¼ber die immutable 32-char `links.id` und schreibt den KV-Payload via `put()`. |
+| `handleAdminDeleteLink` | `DELETE /api/admin/links/:id` | LÃ¶scht einen Link Ã¼ber die immutable 32-char `links.id` und schreibt einen kurzlebigen KV-Tombstone. |
 
 ### Sperren vs. LÃ¶schen
 
@@ -297,6 +300,22 @@ Session-Cookie darf erst danach gesetzt werden.
 - `DELETE /api/admin/users/:id` benÃ¶tigt Idempotenz: wenn User nicht existiert â€“ `404`, nicht `500`
 - `user-administration` und `admin` sind zu `ALIAS_RESERVED` hinzugefÃ¼gt â€“ nie als Short-Code verwendbar
 
+### Umgesetzte SicherheitshÃ¤rtung (Audit 2026-05-14)
+
+Drei Befunde aus dem Security-Audit vom 2026-05-14 wurden in **verbindlicher Reihenfolge** umgesetzt. Die Reihenfolge war nicht verhandelbar, weil S-3 die Routen etabliert, auf denen S-1 und S-2 aufsetzen.
+
+| Schritt | ID | Severity | Inhalt |
+|---------|----|----------|--------|
+| 1 | **S-3** | HIGH | Admin-Routen `PATCH/DELETE /api/admin/links/:id` verwenden die immutable 32-char `links.id`. `short_code` bleibt sichtbar, wird aber nicht mehr als Identifier benutzt. |
+| 2 | **S-1** | CRITICAL | `handleAdminUpdateLink` und `handleAdminDeleteLink` invalidieren KV via `put()` mit aktualisiertem Payload statt `delete()`. `delete()` ist eventually consistent und kann bei Status-Downgrade `blocked â†’ warning` oder Link-LÃ¶schung bis zu ~60 s lang die alte Antwort liefern. Pattern aus `handleInternalScanResult` (`src/handlers/internal.ts:278-294`) Ã¼bernommen. Delete-Tombstone: `is_active = 0`, TTL 60 s. |
+| 3 | **S-2** | HIGH | `handleAdminDeleteUser` invalidiert KV fÃ¼r alle Links des geloeschten Users mit dem Tombstone-Pattern aus S-1. Dadurch redirecten Links eines geloeschten Phishing-Users nicht bis zum KV-TTL-Ende weiter. |
+
+**Dokumentation:**
+
+- Vollstaendiger Audit-Report: `docs/security-audit-2026-05-14.md`
+- Umsetzungsplan (Tests, Migrationen, Deployment): `docs/security-fix-plan-2026-05-14.md`
+- Self-contained Coding-Agent-Prompt: `docs/s3s1s2.md`
+
 
 ---
 
@@ -343,7 +362,7 @@ Status-Hierarchie (User-Intent vor System-Intent):
   else                         â†’ 302 â†’ target_url
 ```
 
-KV-Update nach WÃ¤chter-Scan: `handleInternalScanResult` schreibt `LINKS_KV.put()` mit dem aktualisierten Payload (nicht `delete()` â€” `put()` propagiert sofort an alle Edges, verhindert Drift-Fenster beim Status-Downgrade z.B. `blocked â†’ warning`).
+KV-Update nach WÃ¤chter-Scan und Admin-Mutation: `handleInternalScanResult` und `handleAdminUpdateLink` schreiben `LINKS_KV.put()` mit dem aktualisierten Payload (nicht `delete()` â€” `put()` propagiert sofort an alle Edges, verhindert Drift-Fenster beim Status-Downgrade z.B. `blocked â†’ warning`). `handleAdminDeleteLink` und `handleAdminDeleteUser` schreiben kurzlebige Tombstones (`is_active = 0`, TTL 60 s).
 
 Cache-Invalidierung nach User-Aktion: Toggle `is_active` und Inline-Edit `short_code` fÃ¼hren `KV.delete` mit (implementiert — `handleUpdateLink` und `handleDeleteLink` via `ctx.waitUntil`).
 
@@ -388,17 +407,17 @@ Alle Werte mÃ¼ssen positive Integer sein: `1 â‰¤ h â‰¤ 8760`, `1 â‰
 
 **Jitter-Verantwortung liegt beim WÃ¤chter** (Â±15% auf `max_age_*`-Parameter), nicht beim Worker. Worker liefert nur "fÃ¤llig nach Schwellwert".
 
-### Burst-Revalidation fÃ¼r neue Links (verbindlich fÃ¼r das nÃ¤chste Feature-Update)
+### Burst-Revalidation fÃ¼r neue Links (implementiert)
 
-Phishing-Kampagnen erzeugen oft einen Click-Burst in den ersten 3 bis 6 Stunden. Deshalb soll die nÃ¤chste Ausbaustufe zusÃ¤tzlich eine frÃ¼he NachprÃ¼fung auslÃ¶sen, wenn ein frisch angelegter Link schnell Reichweite aufbaut.
+Phishing-Kampagnen erzeugen oft einen Click-Burst in den ersten 3 bis 6 Stunden. Deshalb lÃ¶st die implementierte Burst-Revalidation zusÃ¤tzlich eine frÃ¼he NachprÃ¼fung aus, wenn ein frisch angelegter Link schnell Reichweite aufbaut.
 
 - **Definition "neu":** `created_at` liegt hÃ¶chstens 6 Stunden zurÃ¼ck.
 - **Burst-Trigger:** `click_count >= 40` innerhalb dieses 6h-Fensters.
 - **Nur echte Re-Evaluation:** Die Burst-Regel greift nur fÃ¼r bereits mindestens einmal geprÃ¼fte Links (`checked = 1`). Der Initial-Scan fÃ¼r `checked = 0` bleibt die hÃ¶chste PrioritÃ¤t und darf durch den Burst-Mechanismus nie verdrÃ¤ngt werden.
-- **Verbindliche Priorisierung in der Pending-Query:** Die Burst-Revalidation ist als eigene PrioritÃ¤tsklasse direkt nach `checked = 0` einzuordnen und **vor jeder zeitbasierten Revalidation** (`warning`, `active`, `blocked`) zu claimen. Verbindliche Reihenfolge: `checked = 0` â†’ `neu + burst >= 40` â†’ stale `warning` â†’ stale `active` â†’ stale `blocked`.
+- **Verbindliche Priorisierung in der Pending-Query:** Die Burst-Revalidation wird als eigene PrioritÃ¤tsklasse direkt nach `checked = 0` und **vor jeder zeitbasierten Revalidation** (`warning`, `active`, `blocked`) geclaimt. Verbindliche Reihenfolge: `checked = 0` â†’ `neu + burst >= 40` â†’ stale `warning` â†’ stale `active` â†’ stale `blocked`.
 - **Einmal pro Frischefenster:** Sobald ein Link innerhalb der ersten 6 Stunden nach einem frÃ¼heren Scan die 40-Klick-Schwelle Ã¼berschreitet, wird genau **eine** vorgezogene NachprÃ¼fung fÃ¤llig. Derselbe Link darf bis zum Ende dieses 6h-Fensters nicht bei jedem weiteren Poll erneut claimed werden.
-- **Verbindliche Persistenz fÃ¼r den Einmal-Trigger:** Es ist eine persistierte Wasserstandsmarke erforderlich, voraussichtlich `last_scanned_click_count INTEGER NOT NULL DEFAULT 0` (oder funktional Ã¤quivalent). `handleInternalScanResult` schreibt nach jedem erfolgreichen Scan den zu diesem Zeitpunkt gÃ¼ltigen `click_count` in dieses Feld. Die Pending-Query muss damit eindeutig erkennen: `click_count >= 40 AND last_scanned_click_count < 40`.
-- **Kein neuer externer Parameter:** Die Schwellwerte `40 Klicks` und `6 Stunden` sind Teil des Worker-/Waechter-Kontrakts fÃ¼r diese Feature-Stufe und sollen in `src/config.ts` als benannte Konstanten dokumentiert werden statt in SQL oder Handlern hartcodiert zu werden.
+- **Verbindliche Persistenz fÃ¼r den Einmal-Trigger:** Die persistierte Wasserstandsmarke `last_scanned_click_count INTEGER NOT NULL DEFAULT 0` erkennt eindeutig: `click_count >= 40 AND last_scanned_click_count < 40`. `handleInternalScanResult` schreibt nach jedem erfolgreichen Scan den zu diesem Zeitpunkt gÃ¼ltigen `click_count` in dieses Feld.
+- **Kein neuer externer Parameter:** Die Schwellwerte `40 Klicks` und `6 Stunden` sind Teil des Worker-/Waechter-Kontrakts fÃ¼r diese Feature-Stufe und sind in `src/config.ts` als `BURST_REVALIDATION_CLICK_THRESHOLD` und `BURST_REVALIDATION_WINDOW_HOURS` dokumentiert statt in SQL oder Handlern hartcodiert zu werden.
 
 Rollenverteilung: Der Worker entscheidet, ob ein Link aufgrund des Burst-Kriteriums fÃ¤llig ist und claimt ihn in der richtigen PrioritÃ¤tsstufe. Der WÃ¤chter bewertet den geclaimten Link anschlieÃŸend normal mit seiner bestehenden Scan- und Scoring-Logik. Ein manueller Override bleibt verbindlich und schlieÃŸt auch diese Burst-Revalidation aus.
 

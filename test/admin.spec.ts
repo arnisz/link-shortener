@@ -5,6 +5,7 @@ import type { Env } from "../src/types";
 import {
 	setupTestDb,
 	setupLinksTable,
+	setupTagsTables,
 	setupRateLimitTable,
 	seedLink,
 	makeRequest,
@@ -83,10 +84,12 @@ async function call(req: Request): Promise<Response> {
 
 describe("Admin Dashboard", () => {
 	const db = env.hello_cf_spa_db;
+	const linksKv = env.LINKS_KV!;
 
 	beforeAll(async () => {
 		await setupTestDb(db);
 		await setupLinksTable(db);
+		await setupTagsTables(db);
 		await setupRateLimitTable(db);
 	});
 
@@ -94,6 +97,13 @@ describe("Admin Dashboard", () => {
 		await db.prepare("DELETE FROM sessions").run();
 		await db.prepare("DELETE FROM links").run();
 		await db.prepare("DELETE FROM users").run();
+		await linksKv.delete("link:adm001");
+		await linksKv.delete("link:adm004");
+		await linksKv.delete("link:del001");
+		await linksKv.delete("link:del002");
+		await linksKv.delete("link:del003");
+		await linksKv.delete("link:race-old");
+		await linksKv.delete("link:race-new");
 	});
 
 	// ── Auth: missing session ────────────────────────────────────────────────
@@ -294,7 +304,7 @@ describe("Admin Dashboard", () => {
 	});
 
 	// ── DELETE /api/admin/users/:id ──────────────────────────────────────────
-	describe("DELETE /api/admin/users/:id", () => {
+		describe("DELETE /api/admin/users/:id", () => {
 		it("deletes user and their links", async () => {
 			const { sessionId } = await seedAdminSession(db, { userId: ADMIN_USER_ID });
 			await seedAdminSession(db, { userId: TARGET_USER_ID });
@@ -310,6 +320,49 @@ describe("Admin Dashboard", () => {
 
 			const links = await db.prepare("SELECT COUNT(*) AS cnt FROM links WHERE user_id = ?").bind(TARGET_USER_ID).first<{ cnt: number }>();
 			expect(links!.cnt).toBe(0);
+		});
+
+		it("writes tombstones for all deleted user links", async () => {
+			const { sessionId } = await seedAdminSession(db, { userId: ADMIN_USER_ID });
+			await seedAdminSession(db, { userId: TARGET_USER_ID });
+			const seeded = [
+				await seedLink(db, { userId: TARGET_USER_ID, shortCode: "del001", status: "active" }),
+				await seedLink(db, { userId: TARGET_USER_ID, shortCode: "del002", status: "active" }),
+				await seedLink(db, { userId: TARGET_USER_ID, shortCode: "del003", status: "active" }),
+			];
+			for (const link of seeded) {
+				await linksKv.put(`link:${link.shortCode}`, JSON.stringify({
+					id: link.id,
+					user_id: TARGET_USER_ID,
+					target_url: "https://target.example.com",
+					is_active: 1,
+					status: "active",
+					expires_at: null,
+				}), { expirationTtl: 300 });
+			}
+			const csrfToken = await generateCsrfToken(sessionId, env.SESSION_SECRET);
+
+			const req = adminRequest(`/api/admin/users/${TARGET_USER_ID}`, "DELETE", sessionId, { csrfToken });
+			const res = await call(req);
+			expect(res.status).toBe(200);
+
+			for (const link of seeded) {
+				const cached = await linksKv.get(`link:${link.shortCode}`, "json") as { id: string; is_active: number; status: string; user_id: string | null } | null;
+				expect(cached).toMatchObject({ id: link.id, user_id: null, is_active: 0, status: "blocked" });
+
+				const redirectRes = await call(makeRequest(`${BASE}/r/${link.shortCode}`, "GET"));
+				expect(redirectRes.status).toBe(404);
+			}
+		});
+
+		it("deletes users without links without KV writes or errors", async () => {
+			const { sessionId } = await seedAdminSession(db, { userId: ADMIN_USER_ID });
+			await seedAdminSession(db, { userId: TARGET_USER_ID });
+			const csrfToken = await generateCsrfToken(sessionId, env.SESSION_SECRET);
+
+			const req = adminRequest(`/api/admin/users/${TARGET_USER_ID}`, "DELETE", sessionId, { csrfToken });
+			const res = await call(req);
+			expect(res.status).toBe(200);
 		});
 
 		it("returns 404 for non-existent user (idempotency)", async () => {
@@ -332,15 +385,23 @@ describe("Admin Dashboard", () => {
 		});
 	});
 
-	// ── PATCH/DELETE /api/admin/links/:code ──────────────────────────────────
+	// ── PATCH/DELETE /api/admin/links/:id ────────────────────────────────────
 	describe("Admin link management", () => {
-		it("PATCH /api/admin/links/:code updates status and sets manual_override=1", async () => {
+		it("PATCH /api/admin/links/:id updates status, sets manual_override=1 and updates KV", async () => {
 			const { sessionId } = await seedAdminSession(db, { userId: ADMIN_USER_ID });
 			await seedAdminSession(db, { userId: TARGET_USER_ID });
-			await seedLink(db, { userId: TARGET_USER_ID, shortCode: "adm001", status: "active", manualOverride: 0 });
+			const { id } = await seedLink(db, { userId: TARGET_USER_ID, shortCode: "adm001", status: "active", manualOverride: 0 });
+			await linksKv.put("link:adm001", JSON.stringify({
+				id,
+				user_id: TARGET_USER_ID,
+				target_url: "https://target.example.com",
+				is_active: 1,
+				status: "active",
+				expires_at: null,
+			}), { expirationTtl: 300 });
 			const csrfToken = await generateCsrfToken(sessionId, env.SESSION_SECRET);
 
-			const req = adminRequest("/api/admin/links/adm001", "PATCH", sessionId, {
+			const req = adminRequest(`/api/admin/links/${id}`, "PATCH", sessionId, {
 				csrfToken,
 				body: { status: "blocked" },
 			});
@@ -353,15 +414,47 @@ describe("Admin Dashboard", () => {
 				.first<{ status: string; manual_override: number }>();
 			expect(row!.status).toBe("blocked");
 			expect(row!.manual_override).toBe(1);
+
+			const cached = await linksKv.get("link:adm001", "json") as { id: string; status: string; is_active: number } | null;
+			expect(cached).toMatchObject({ id, status: "blocked", is_active: 1 });
 		});
 
-		it("PATCH /api/admin/links/:code updates spam_score", async () => {
+		it("PATCH /api/admin/links/:id overwrites stale blocked KV entries immediately on blocked→warning downgrade", async () => {
 			const { sessionId } = await seedAdminSession(db, { userId: ADMIN_USER_ID });
 			await seedAdminSession(db, { userId: TARGET_USER_ID });
-			await seedLink(db, { userId: TARGET_USER_ID, shortCode: "adm002" });
+			const { id } = await seedLink(db, { userId: TARGET_USER_ID, shortCode: "adm007", status: "blocked", manualOverride: 0 });
+			await linksKv.put("link:adm007", JSON.stringify({
+				id,
+				user_id: TARGET_USER_ID,
+				target_url: "https://target.example.com/phish",
+				is_active: 1,
+				status: "blocked",
+				expires_at: null,
+			}), { expirationTtl: 300 });
 			const csrfToken = await generateCsrfToken(sessionId, env.SESSION_SECRET);
 
-			const req = adminRequest("/api/admin/links/adm002", "PATCH", sessionId, {
+			const req = adminRequest(`/api/admin/links/${id}`, "PATCH", sessionId, {
+				csrfToken,
+				body: { status: "warning" },
+			});
+			const res = await call(req);
+			expect(res.status).toBe(200);
+
+			const cached = await linksKv.get("link:adm007", "json") as { status: string; is_active: number } | null;
+			expect(cached).toMatchObject({ status: "warning", is_active: 1 });
+
+			const redirectRes = await call(makeRequest(`${BASE}/r/adm007`, "GET"));
+			expect(redirectRes.status).toBe(302);
+			expect(redirectRes.headers.get("Location")).toBe(`/warning?code=adm007`);
+		});
+
+		it("PATCH /api/admin/links/:id updates spam_score", async () => {
+			const { sessionId } = await seedAdminSession(db, { userId: ADMIN_USER_ID });
+			await seedAdminSession(db, { userId: TARGET_USER_ID });
+			const { id } = await seedLink(db, { userId: TARGET_USER_ID, shortCode: "adm002" });
+			const csrfToken = await generateCsrfToken(sessionId, env.SESSION_SECRET);
+
+			const req = adminRequest(`/api/admin/links/${id}`, "PATCH", sessionId, {
 				csrfToken,
 				body: { spam_score: 0.55 },
 			});
@@ -376,13 +469,13 @@ describe("Admin Dashboard", () => {
 			expect(row!.manual_override).toBe(1);
 		});
 
-		it("PATCH /api/admin/links/:code returns 400 for invalid status", async () => {
+		it("PATCH /api/admin/links/:id returns 400 for invalid status", async () => {
 			const { sessionId } = await seedAdminSession(db, { userId: ADMIN_USER_ID });
 			await seedAdminSession(db, { userId: TARGET_USER_ID });
-			await seedLink(db, { userId: TARGET_USER_ID, shortCode: "adm003" });
+			const { id } = await seedLink(db, { userId: TARGET_USER_ID, shortCode: "adm003" });
 			const csrfToken = await generateCsrfToken(sessionId, env.SESSION_SECRET);
 
-			const req = adminRequest("/api/admin/links/adm003", "PATCH", sessionId, {
+			const req = adminRequest(`/api/admin/links/${id}`, "PATCH", sessionId, {
 				csrfToken,
 				body: { status: "oops" },
 			});
@@ -390,18 +483,106 @@ describe("Admin Dashboard", () => {
 			expect(res.status).toBe(400);
 		});
 
-		it("DELETE /api/admin/links/:code deletes the link", async () => {
+		it("PATCH /api/admin/links/<short_code> returns 404 from router", async () => {
 			const { sessionId } = await seedAdminSession(db, { userId: ADMIN_USER_ID });
 			await seedAdminSession(db, { userId: TARGET_USER_ID });
-			await seedLink(db, { userId: TARGET_USER_ID, shortCode: "adm004" });
+			await seedLink(db, { userId: TARGET_USER_ID, shortCode: "alias-1" });
 			const csrfToken = await generateCsrfToken(sessionId, env.SESSION_SECRET);
 
-			const req = adminRequest("/api/admin/links/adm004", "DELETE", sessionId, { csrfToken });
+			const req = adminRequest("/api/admin/links/alias-1", "PATCH", sessionId, {
+				csrfToken,
+				body: { status: "blocked" },
+			});
+			const res = await call(req);
+			expect(res.status).toBe(404);
+		});
+
+		it("PATCH /api/admin/links/:id still works after a parallel alias change", async () => {
+			const { sessionId: adminSessionId } = await seedAdminSession(db, { userId: ADMIN_USER_ID });
+			const adminCsrfToken = await generateCsrfToken(adminSessionId, env.SESSION_SECRET);
+			const { sessionId: ownerSessionId } = await seedAdminSession(db, { userId: TARGET_USER_ID });
+			const ownerCsrfToken = await generateCsrfToken(ownerSessionId, env.SESSION_SECRET);
+			const { id } = await seedLink(db, { userId: TARGET_USER_ID, shortCode: "race-old", status: "active", manualOverride: 0 });
+
+			const updateReq = makeRequest(`${BASE}/api/links/race-old/update`, "POST", {
+				cookies: { "__Host-sid": ownerSessionId },
+				headers: { "X-CSRF-Token": ownerCsrfToken, "Origin": BASE, "Content-Type": "application/json" },
+				body: JSON.stringify({ target_url: "https://example.com", alias: "race-new" }),
+			});
+			const updateRes = await call(updateReq);
+			expect(updateRes.status).toBe(200);
+
+			const req = adminRequest(`/api/admin/links/${id}`, "PATCH", adminSessionId, {
+				csrfToken: adminCsrfToken,
+				body: { status: "blocked" },
+			});
+			const res = await call(req);
+			expect(res.status).toBe(200);
+
+			const row = await db
+				.prepare("SELECT short_code, status FROM links WHERE id = ?")
+				.bind(id)
+				.first<{ short_code: string; status: string }>();
+			expect(row).toMatchObject({ short_code: "race-new", status: "blocked" });
+		});
+
+		it("PATCH /api/admin/links/:id returns 404 for unknown id without side effects", async () => {
+			const { sessionId } = await seedAdminSession(db, { userId: ADMIN_USER_ID });
+			await seedAdminSession(db, { userId: TARGET_USER_ID });
+			await seedLink(db, { userId: TARGET_USER_ID, shortCode: "adm005", status: "active" });
+			const csrfToken = await generateCsrfToken(sessionId, env.SESSION_SECRET);
+
+			const req = adminRequest(`/api/admin/links/${"c".repeat(32)}`, "PATCH", sessionId, {
+				csrfToken,
+				body: { status: "blocked" },
+			});
+			const res = await call(req);
+			expect(res.status).toBe(404);
+
+			const row = await db.prepare("SELECT status FROM links WHERE short_code = ?").bind("adm005").first<{ status: string }>();
+			expect(row!.status).toBe("active");
+		});
+
+		it("DELETE /api/admin/links/:id deletes the link and writes a tombstone", async () => {
+			const { sessionId } = await seedAdminSession(db, { userId: ADMIN_USER_ID });
+			await seedAdminSession(db, { userId: TARGET_USER_ID });
+			const { id } = await seedLink(db, { userId: TARGET_USER_ID, shortCode: "adm004" });
+			await linksKv.put("link:adm004", JSON.stringify({
+				id,
+				user_id: TARGET_USER_ID,
+				target_url: "https://target.example.com",
+				is_active: 1,
+				status: "active",
+				expires_at: null,
+			}), { expirationTtl: 300 });
+			const csrfToken = await generateCsrfToken(sessionId, env.SESSION_SECRET);
+
+			const req = adminRequest(`/api/admin/links/${id}`, "DELETE", sessionId, { csrfToken });
 			const res = await call(req);
 			expect(res.status).toBe(200);
 
 			const row = await db.prepare("SELECT id FROM links WHERE short_code = ?").bind("adm004").first();
 			expect(row).toBeNull();
+
+			const cached = await linksKv.get("link:adm004", "json") as { id: string; is_active: number; status: string; user_id: string | null } | null;
+			expect(cached).toMatchObject({ id, user_id: null, is_active: 0, status: "blocked" });
+
+			const redirectRes = await call(makeRequest(`${BASE}/r/adm004`, "GET"));
+			expect(redirectRes.status).toBe(404);
+		});
+
+		it("DELETE /api/admin/links/:id returns 404 for unknown id without side effects", async () => {
+			const { sessionId } = await seedAdminSession(db, { userId: ADMIN_USER_ID });
+			await seedAdminSession(db, { userId: TARGET_USER_ID });
+			await seedLink(db, { userId: TARGET_USER_ID, shortCode: "adm006" });
+			const csrfToken = await generateCsrfToken(sessionId, env.SESSION_SECRET);
+
+			const req = adminRequest(`/api/admin/links/${"c".repeat(32)}`, "DELETE", sessionId, { csrfToken });
+			const res = await call(req);
+			expect(res.status).toBe(404);
+
+			const row = await db.prepare("SELECT id FROM links WHERE short_code = ?").bind("adm006").first();
+			expect(row).not.toBeNull();
 		});
 	});
 

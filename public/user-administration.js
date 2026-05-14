@@ -228,15 +228,14 @@
 		}
 		linksTbody.innerHTML = filtered.map(l => {
 			const activeClass = l.is_active ? 'badge-active' : 'badge-inactive';
-			const score = typeof l.spam_score === 'number' ? l.spam_score.toFixed(2) : '–';
-			return `<tr data-code="${esc(l.short_code)}">
+			return `<tr data-id="${esc(l.id)}">
 				<td style="white-space:nowrap">
-					<button class="btn btn-delete" data-action="delete-link" data-code="${esc(l.short_code)}" title="Link löschen">🗑</button>
+					<button class="btn btn-delete" data-action="delete-link" data-id="${esc(l.id)}" data-short-code="${esc(l.short_code)}" title="Link löschen">🗑</button>
 				</td>
 				<td><a href="/r/${esc(l.short_code)}" target="_blank" rel="noopener">${esc(l.short_code)}</a></td>
 				<td><span class="truncate" title="${esc(l.target_url)}">${esc(l.target_url)}</span></td>
 				<td>
-					<select class="status-select" data-action="change-status" data-code="${esc(l.short_code)}" data-orig="${esc(l.status)}">
+					<select class="status-select" data-action="change-status" data-id="${esc(l.id)}" data-short-code="${esc(l.short_code)}" data-orig="${esc(l.status)}">
 						<option value="active"${l.status === 'active' ? ' selected' : ''}>active</option>
 						<option value="warning"${l.status === 'warning' ? ' selected' : ''}>warning</option>
 						<option value="blocked"${l.status === 'blocked' ? ' selected' : ''}>blocked</option>
@@ -244,10 +243,10 @@
 				</td>
 				<td style="white-space:nowrap">
 					<input class="score-input" type="number" min="0" max="1" step="0.01"
-						data-action="edit-score" data-code="${esc(l.short_code)}"
+						data-action="edit-score" data-id="${esc(l.id)}"
 						value="${typeof l.spam_score === 'number' ? l.spam_score : ''}"
 						placeholder="0.00" />
-					<button class="btn btn-save" data-action="save-score" data-code="${esc(l.short_code)}">✓</button>
+					<button class="btn btn-save" data-action="save-score" data-id="${esc(l.id)}" data-short-code="${esc(l.short_code)}">✓</button>
 				</td>
 				<td><span class="badge ${activeClass}">${l.is_active ? 'Ja' : 'Nein'}</span></td>
 				<td>${l.click_count ?? 0}</td>
@@ -257,7 +256,7 @@
 		}).join('');
 	}
 
-	async function adminLinkAction(action, code, extra) {
+	async function adminLinkAction(action, id, extra) {
 		let method, body;
 		if (action === 'delete-link') {
 			method = 'DELETE';
@@ -266,7 +265,7 @@
 			method = 'PATCH';
 			body = extra;
 		}
-		const res = await fetch(`/api/admin/links/${encodeURIComponent(code)}`, {
+		const res = await fetch(`/api/admin/links/${encodeURIComponent(id)}`, {
 			method,
 			credentials: 'include',
 			headers: authHeaders(),
@@ -283,17 +282,18 @@
 	linksTbody.addEventListener('change', async e => {
 		const sel = e.target.closest('select[data-action="change-status"]');
 		if (!sel) return;
-		const code = sel.dataset.code;
+		const id = sel.dataset.id;
+		const shortCode = sel.dataset.shortCode;
 		const newStatus = sel.value;
-		if (!confirm(`Status von "${code}" auf "${newStatus}" setzen?\nDies setzt manual_override=1 (Wächter überschreibt nicht mehr).`)) {
+		if (!confirm(`Status von "${shortCode}" auf "${newStatus}" setzen?\nDies setzt manual_override=1 (Wächter überschreibt nicht mehr).`)) {
 			sel.value = sel.dataset.orig;
 			return;
 		}
-		const ok = await adminLinkAction('change-status', code, { status: newStatus });
+		const ok = await adminLinkAction('change-status', id, { status: newStatus });
 		if (ok) {
 			sel.dataset.orig = newStatus;
 			// update local cache
-			const link = allLinks.find(l => l.short_code === code);
+			const link = allLinks.find(l => l.id === id);
 			if (link) link.status = newStatus;
 		} else {
 			sel.value = sel.dataset.orig;
@@ -304,20 +304,21 @@
 		const btn = e.target.closest('button[data-action]');
 		if (!btn) return;
 		const action = btn.dataset.action;
-		const code = btn.dataset.code;
+		const id = btn.dataset.id;
+		const shortCode = btn.dataset.shortCode;
 
 		if (action === 'delete-link') {
-			if (!confirm(`Link "${code}" unwiderruflich löschen?`)) return;
-			const ok = await adminLinkAction('delete-link', code);
+			if (!confirm(`Link "${shortCode}" unwiderruflich löschen?`)) return;
+			const ok = await adminLinkAction('delete-link', id);
 			if (ok) {
-				allLinks = allLinks.filter(l => l.short_code !== code);
+				allLinks = allLinks.filter(l => l.id !== id);
 				renderLinks();
 			}
 			return;
 		}
 
 		if (action === 'save-score') {
-			const row = linksTbody.querySelector(`tr[data-code="${CSS.escape(code)}"]`);
+			const row = linksTbody.querySelector(`tr[data-id="${CSS.escape(id)}"]`);
 			const input = row ? row.querySelector('input[data-action="edit-score"]') : null;
 			if (!input) return;
 			const val = parseFloat(input.value);
@@ -325,9 +326,9 @@
 				alert('Spam-Score muss zwischen 0.0 und 1.0 liegen.');
 				return;
 			}
-			const ok = await adminLinkAction('save-score', code, { spam_score: val });
+			const ok = await adminLinkAction('save-score', id, { spam_score: val });
 			if (ok) {
-				const link = allLinks.find(l => l.short_code === code);
+				const link = allLinks.find(l => l.id === id);
 				if (link) link.spam_score = val;
 			}
 		}

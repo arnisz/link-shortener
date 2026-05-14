@@ -15,12 +15,22 @@ import { requireJson } from "../validation";
 async function checkAdminAuth(request: Request, env: Env): Promise<string | null> {
 	// Factor 1: valid session cookie (getSessionUser reads __Host-sid internally)
 	const user = await getSessionUser(request, env);
-	if (!user) return null;
+	if (!user) {
+		log("ADMIN_AUTH", "rejected reason=no_session");
+		return null;
+	}
 
 	// Factor 2: Authorization: Bearer ADMIN_TOKEN
 	const authHeader = request.headers.get("Authorization") ?? "";
 	const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
-	if (!token || token !== env.ADMIN_TOKEN) return null;
+	if (!token) {
+		log("ADMIN_AUTH", "rejected reason=no_token");
+		return null;
+	}
+	if (token !== env.ADMIN_TOKEN) {
+		log("ADMIN_AUTH", "rejected reason=token_mismatch");
+		return null;
+	}
 
 	return user.id;
 }
@@ -176,7 +186,8 @@ export async function handleAdminUnblockUser(
 export async function handleAdminDeleteUser(
 	id: string,
 	request: Request,
-	env: Env
+	env: Env,
+	ctx: ExecutionContext
 ): Promise<Response> {
 	const adminId = await checkAdminAuth(request, env);
 	if (!adminId) return errResponse("Unauthorized", 401);
@@ -190,27 +201,52 @@ export async function handleAdminDeleteUser(
 		.first<{ id: string }>();
 	if (!user) return errResponse("User not found", 404);
 
+	const links = await env.hello_cf_spa_db
+		.prepare("SELECT id, short_code FROM links WHERE user_id = ?")
+		.bind(id)
+		.all<{ id: string; short_code: string }>();
+	const codes = links.results;
+
 	await env.hello_cf_spa_db.batch([
 		env.hello_cf_spa_db.prepare("DELETE FROM sessions WHERE user_id = ?").bind(id),
 		env.hello_cf_spa_db.prepare("DELETE FROM links WHERE user_id = ?").bind(id),
 		env.hello_cf_spa_db.prepare("DELETE FROM users WHERE id = ?").bind(id),
 	]);
 
+	if (env.LINKS_KV && codes.length > 0) {
+		ctx.waitUntil(Promise.all(
+			codes.map(({ id: linkId, short_code }) =>
+				env.LINKS_KV.put(
+					`link:${short_code}`,
+					JSON.stringify({
+						id: linkId,
+						user_id: null,
+						target_url: "",
+						is_active: 0,
+						status: "blocked",
+						expires_at: null,
+					}),
+					{ expirationTtl: 60 }
+				)
+			)
+		));
+	}
+
 	log("ADMIN", `User deleted: uid=${id.slice(0, 8)}… by admin=${adminId.slice(0, 8)}…`);
 	return jsonResponse({ ok: true });
 }
 
 // ---------------------------------------------------------------------------
-// PATCH /api/admin/links/:code
+// PATCH /api/admin/links/:id
 // ---------------------------------------------------------------------------
 
 /**
- * Updates a link across all users by short_code.
+ * Updates a link across all users by immutable link id.
  * Allowed fields: status and/or spam_score.
  * Always sets manual_override=1 so the Wächter no longer overwrites status.
  */
 export async function handleAdminUpdateLink(
-	code: string,
+	id: string,
 	request: Request,
 	env: Env,
 	ctx: ExecutionContext
@@ -256,29 +292,54 @@ export async function handleAdminUpdateLink(
 	}
 
 	const result = await env.hello_cf_spa_db
-		.prepare(`UPDATE links SET ${setClauses.join(", ")} WHERE short_code = ?`)
-		.bind(...binds, code)
-		.run();
+		.prepare(
+			`UPDATE links SET ${setClauses.join(", ")} WHERE id = ?
+			 RETURNING short_code, id, target_url, is_active, status, expires_at, user_id`
+		)
+		.bind(...binds, id)
+		.first<{
+			short_code: string;
+			id: string;
+			target_url: string;
+			is_active: number;
+			status: string;
+			expires_at: string | null;
+			user_id: string | null;
+		}>();
 
-	if ((result.meta?.changes ?? 0) === 0) {
+	if (!result) {
 		return errResponse("Link not found", 404);
 	}
 
 	if (env.LINKS_KV) {
-		ctx.waitUntil(env.LINKS_KV.delete(`link:${code}`));
+		// KV delete() is eventually consistent and may leave stale redirect entries
+		// at other edge nodes for up to ~60s. A put() with the updated payload
+		// propagates the new status immediately and avoids drift during incidents.
+		ctx.waitUntil(env.LINKS_KV.put(
+			`link:${result.short_code}`,
+			JSON.stringify({
+				id: result.id,
+				user_id: result.user_id,
+				target_url: result.target_url,
+				is_active: result.is_active,
+				status: result.status,
+				expires_at: result.expires_at,
+			}),
+			{ expirationTtl: 300 }
+		));
 	}
 
-	log("ADMIN", `Link updated: code=${code} by admin=${adminId.slice(0, 8)}…`);
+	log("ADMIN", `Link updated: id=${id} by admin=${adminId.slice(0, 8)}…`);
 	return jsonResponse({ ok: true });
 }
 
 // ---------------------------------------------------------------------------
-// DELETE /api/admin/links/:code
+// DELETE /api/admin/links/:id
 // ---------------------------------------------------------------------------
 
-/** Deletes a link across all users by short_code. */
+/** Deletes a link across all users by immutable link id. */
 export async function handleAdminDeleteLink(
-	code: string,
+	id: string,
 	request: Request,
 	env: Env,
 	ctx: ExecutionContext
@@ -290,19 +351,39 @@ export async function handleAdminDeleteLink(
 	if (csrfError) return csrfError;
 
 	const result = await env.hello_cf_spa_db
-		.prepare("DELETE FROM links WHERE short_code = ?")
-		.bind(code)
-		.run();
+		.prepare("DELETE FROM links WHERE id = ? RETURNING short_code, id, target_url, is_active, expires_at, user_id")
+		.bind(id)
+		.first<{
+			short_code: string;
+			id: string;
+			target_url: string;
+			is_active: number;
+			expires_at: string | null;
+			user_id: string | null;
+		}>();
 
-	if ((result.meta?.changes ?? 0) === 0) {
+	if (!result) {
 		return errResponse("Link not found", 404);
 	}
 
 	if (env.LINKS_KV) {
-		ctx.waitUntil(env.LINKS_KV.delete(`link:${code}`));
+		// KV delete() is eventually consistent; write a short-lived tombstone so
+		// every edge immediately applies the hot-path 404 hierarchy after deletion.
+		ctx.waitUntil(env.LINKS_KV.put(
+			`link:${result.short_code}`,
+			JSON.stringify({
+				id: result.id,
+				user_id: null,
+				target_url: "",
+				is_active: 0,
+				status: "blocked",
+				expires_at: null,
+			}),
+			{ expirationTtl: 60 }
+		));
 	}
 
-	log("ADMIN", `Link deleted: code=${code} by admin=${adminId.slice(0, 8)}…`);
+	log("ADMIN", `Link deleted: id=${id} by admin=${adminId.slice(0, 8)}…`);
 	return jsonResponse({ ok: true });
 }
 

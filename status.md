@@ -1,5 +1,65 @@
 # Status Log
 
+## 2026-05-14 — Implementierung: Security-Audit-Fixes S-3/S-1/S-2
+
+**Status:** implementiert ✅ — 2026-05-14
+
+### Umgesetzte Aenderungen
+
+- `src/index.ts` — Admin-Link-Mutationsrouten auf 32-char `links.id` begrenzt; `handleAdminDeleteUser` bekommt `ExecutionContext` fuer KV-Tombstones.
+- `src/handlers/admin.ts` — Admin-Link-PATCH/DELETE arbeiten ueber immutable `links.id`; KV-Invalidierung nutzt `put()` mit aktualisiertem Payload bzw. Tombstone; User-Delete schreibt Tombstones fuer alle User-Links; Admin-Auth-Rejects loggen `reason`.
+- `public/user-administration.js` — Admin-UI verwendet `id` als API-/DOM-Identifier; `short_code` bleibt nur Anzeige- und Bestätigungstext.
+- `test/helpers.ts` — `seedLink()` erzeugt nun realistische 32-char-Hex-`links.id`-Werte, damit Admin-Routen- und KV-Tests mit dem produktiven ID-Format laufen.
+- `test/admin.spec.ts` — ID-Routen-, Alias-Race-, Unknown-ID-, KV-Drift- und Tombstone-Tests fuer Admin-Link- und User-Delete-Flows ergaenzt.
+- `AGENTS.md` — CSRF-Sektion korrigiert, Admin-Routen auf `:id` aktualisiert, Admin-KV-`put()`/Tombstone dokumentiert und Burst-Revalidation ins Praesens gesetzt.
+
+### Verifikation
+
+- Gezielte Admin-Tests und Gesamtsuite wurden im Implementierungstask ausgefuehrt; Details siehe Task-Zusammenfassung.
+- Manueller Wrangler/Admin-UI-Smoke-Test bleibt fuer eine interaktive Umgebung nachgelagert.
+
+---
+
+## 2026-05-14 — Planung: Security-Audit-Fixes S-3 → S-1 → S-2
+
+**Status:** implementiert ✅ — umgesetzt im Eintrag „2026-05-14 — Implementierung: Security-Audit-Fixes S-3/S-1/S-2".
+
+### Anlass
+
+Security-Audit vom 2026-05-14 hat drei kritische/hochsevere Befunde in den `/api/admin/*`-Endpunkten identifiziert. Volle Befundliste in `docs/security-audit-2026-05-14.md`, Umsetzungsdetails in `docs/security-fix-plan-2026-05-14.md`, ausfuehrbarer Coding-Agent-Prompt in `docs/s3s1s2.md`.
+
+### Verbindliche Reihenfolge
+
+Die drei Fixes haengen voneinander ab — S-3 etabliert die ID-basierten Admin-Routen, auf denen S-1 und S-2 aufsetzen. Dadurch wird jede KV-Invalidierungslogik nur einmal geschrieben.
+
+1. **S-3 (HIGH) — Admin-Endpoints auf `links.id` statt mutierbaren `short_code` umstellen.**
+   Betrifft: Router (`src/index.ts`), Handler (`src/handlers/admin.ts:212-307`), Frontend (`public/user-administration.js`). Tests in `test/admin.spec.ts`.
+
+2. **S-1 (CRITICAL) — Admin-Mutationen invalidieren KV-Cache via `put()` mit aktualisiertem Payload statt `delete()`.**
+   Pattern bereits in `handleInternalScanResult` (`src/handlers/internal.ts:278-294`) erprobt. `handleAdminDeleteLink` schreibt Tombstone (`is_active = 0`, TTL 60 s).
+
+3. **S-2 (HIGH) — `handleAdminDeleteUser` invalidiert KV fuer alle Links des geloeschten Users.**
+   Verwendet das Tombstone-Pattern aus S-1.
+
+### Mit-Fixes im selben PR (empfohlen)
+
+- **D-1 (HIGH)** — `AGENTS.md` CSRF-Sektion auf den Stand nach Bugfix 9.5.26-2 korrigieren.
+- **D-3 (LOW)** — `AGENTS.md` Burst-Revalidation-Sektion ins Praesens.
+- **S-6 (MEDIUM)** — `log("ADMIN_AUTH", "rejected reason=…")` in `checkAdminAuth` ergaenzen.
+
+### Aus dem PR herausgehalten (eigene Tickets)
+
+- **S-4** (timingSafeEqual fuer ADMIN/WAECHTER-Token)
+- **S-5** (Hostname-Normalisierung in `/api/internal/kv/urlhaus`)
+- **S-7** (`scans.length`-Bound in `handleInternalScanResult`)
+- **D-2** (Timestamp-Format-Vereinheitlichung — braucht Abstimmung mit Stats-Worker-Owner)
+
+### Definition of Done
+
+Identisch zur Liste in `docs/security-fix-plan-2026-05-14.md` Abschnitt 5.
+
+---
+
 ## 2026-05-14 — Implementierung: Burst-Revalidation fuer neue Links (40 Klicks in 6h)
 
 **Status:** implementiert ✅ — 2026-05-14
@@ -206,27 +266,27 @@ Das Admin-Dashboard war bisher auf User-Management (sperren/entsperren/löschen)
 
 **Status-Änderung per Dropdown:**
 - Jede Link-Zeile hat ein `<select>` mit den Optionen `active`, `warning`, `blocked`
-- Änderung sendet `PATCH /api/admin/links/:code` mit `{ status }` im Body
+- Änderung sendet `PATCH /api/admin/links/:id` mit `{ status }` im Body (immutable 32-char `links.id`)
 - Setzt `manual_override=1` → der Wächter überschreibt den Status nicht mehr automatisch
-- Invalidiert den KV-Cache sofort (kein 5-Minuten-Drift)
+- Überschreibt den KV-Cache via `put()` sofort mit dem aktualisierten Payload (kein Drift-Fenster durch eventual-consistent `delete()`)
 
 **Spam-Score-Bearbeitung:**
 - Jede Link-Zeile zeigt den aktuellen `spam_score` (0.00–1.00) in einem Number-Input
-- Speichern-Button (✓) sendet `PATCH /api/admin/links/:code` mit `{ spam_score }`
+- Speichern-Button (✓) sendet `PATCH /api/admin/links/:id` mit `{ spam_score }`
 - Validierung: Wert muss im Bereich [0, 1] liegen
 
 **Link löschen:**
 - Button 🗑 am Zeilenanfang
-- Sendet `DELETE /api/admin/links/:code`
-- Löscht den Link cross-user (kein `user_id`-Filter)
-- Invalidiert KV-Cache
+- Sendet `DELETE /api/admin/links/:id`
+- Löscht den Link cross-user über die immutable 32-char `links.id` (kein `user_id`-Filter)
+- Schreibt einen kurzlebigen KV-Tombstone (`is_active = 0`, TTL 60 s)
 
 ### API-Endpunkte
 
 | Method | Path | Handler |
 |--------|------|---------|
-| `PATCH` | `/api/admin/links/:code` | `handleAdminUpdateLink` — setzt `status` und/oder `spam_score`, `manual_override=1`, KV-Invalidierung |
-| `DELETE` | `/api/admin/links/:code` | `handleAdminDeleteLink` — löscht Link per `short_code`, KV-Invalidierung |
+| `PATCH` | `/api/admin/links/:id` | `handleAdminUpdateLink` — setzt `status` und/oder `spam_score`, `manual_override=1`, KV-Update via `put()` |
+| `DELETE` | `/api/admin/links/:id` | `handleAdminDeleteLink` — löscht Link per immutable `links.id`, schreibt KV-Tombstone |
 
 ### Geänderte Dateien
 
