@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="de">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>Admin – aadd.li</title>
+	<link rel="stylesheet" href="/style.css" />
+	<style>
+		body { font-family: system-ui, sans-serif; background: #f5f5f5; margin: 0; }
+		.container { max-width: 1100px; margin: 0 auto; padding: 1.5rem 1rem; }
+		h1 { font-size: 1.4em; margin-bottom: 0.2em; }
+		h2 { font-size: 1.1em; margin: 1.6em 0 0.5em; border-bottom: 1px solid #ddd; padding-bottom: 0.3em; }
+		#auth-section { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 1.2rem; max-width: 420px; margin-bottom: 1.5rem; }
+		#auth-section label { display: block; font-size: 0.9em; margin-bottom: 0.3em; font-weight: 600; }
+		#auth-section input { width: 100%; box-sizing: border-box; padding: 0.45rem 0.6rem; border: 1px solid #ccc; border-radius: 4px; font-size: 0.95em; }
+		#auth-section button { margin-top: 0.7rem; padding: 0.45rem 1.1rem; background: #1a73e8; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 0.95em; }
+		#auth-section button:hover { background: #1558b0; }
+		#status-msg { margin: 0.5rem 0 0; font-size: 0.88em; }
+		#status-msg.ok { color: #1a7a1a; }
+		#status-msg.err { color: #c0392b; }
+		#main-content { display: none; }
+		table { width: 100%; border-collapse: collapse; font-size: 0.88em; background: #fff; border: 1px solid #ddd; border-radius: 6px; overflow: hidden; }
+		th { background: #f0f0f0; text-align: left; padding: 0.5rem 0.6rem; font-weight: 600; border-bottom: 1px solid #ddd; }
+		td { padding: 0.45rem 0.6rem; border-bottom: 1px solid #eee; vertical-align: top; word-break: break-all; }
+		tr:last-child td { border-bottom: none; }
+		tr:hover td { background: #fafafa; }
+		.badge { display: inline-block; padding: 0.15em 0.5em; border-radius: 3px; font-size: 0.8em; font-weight: 600; }
+		.badge-active { background: #d4edda; color: #155724; }
+		.badge-warning { background: #fff3cd; color: #856404; }
+		.badge-blocked { background: #f8d7da; color: #721c24; }
+		.badge-inactive { background: #e2e3e5; color: #383d41; }
+		.badge-yes { background: #f8d7da; color: #721c24; }
+		.badge-no { background: #d4edda; color: #155724; }
+		.btn { padding: 0.25rem 0.6rem; border: none; border-radius: 3px; cursor: pointer; font-size: 0.82em; margin-right: 3px; }
+		.btn-block { background: #e67e22; color: #fff; }
+		.btn-block:hover { background: #ca6f1e; }
+		.btn-unblock { background: #27ae60; color: #fff; }
+		.btn-unblock:hover { background: #1e8449; }
+		.btn-delete { background: #c0392b; color: #fff; }
+		.btn-delete:hover { background: #a93226; }
+		.btn-reload { background: #1a73e8; color: #fff; }
+		.btn-reload:hover { background: #1558b0; }
+		select.status-select { font-size: 0.82em; padding: 0.2rem 0.3rem; border-radius: 3px; border: 1px solid #ccc; cursor: pointer; }
+		input.score-input { font-size: 0.82em; padding: 0.2rem 0.3rem; border-radius: 3px; border: 1px solid #ccc; width: 4.5rem; }
+		.btn-save { background: #1a73e8; color: #fff; }
+		.btn-save:hover { background: #1558b0; }
+		.pagination { margin-top: 0.7rem; display: flex; gap: 0.5rem; align-items: center; font-size: 0.88em; }
+		.pagination button { padding: 0.3rem 0.8rem; border: 1px solid #ccc; border-radius: 4px; background: #fff; cursor: pointer; }
+		.pagination button:disabled { opacity: 0.4; cursor: default; }
+		.search-row { display: flex; gap: 0.5rem; margin-bottom: 0.7rem; align-items: center; }
+		.search-row input { padding: 0.4rem 0.6rem; border: 1px solid #ccc; border-radius: 4px; font-size: 0.9em; flex: 1; max-width: 320px; }
+		.truncate { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; vertical-align: bottom; }
+		#logout-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+		#logout-bar span { font-size: 0.88em; color: #555; }
+		#logout-bar button { padding: 0.3rem 0.8rem; border: 1px solid #ccc; border-radius: 4px; background: #fff; cursor: pointer; font-size: 0.85em; }
+	</style>
+</head>
+<body>
+<main class="container">
+	<h1>🔐 Admin-Dashboard</h1>
+
+	<!-- Token-Eingabe -->
+	<section id="auth-section">
+		<label for="token-input">Admin-Token</label>
+		<input type="password" id="token-input" placeholder="Bearer-Token eingeben…" autocomplete="off" />
+		<button id="auth-btn">Anmelden</button>
+		<p id="status-msg"></p>
+	</section>
+
+	<!-- Hauptinhalt (nach Auth) -->
+	<div id="main-content">
+		<div id="logout-bar">
+			<span id="admin-info"></span>
+			<button id="logout-btn">Token vergessen</button>
+		</div>
+
+		<!-- Users -->
+		<h2>Benutzer <button class="btn btn-reload" id="reload-users-btn">↻ Neu laden</button></h2>
+		<div class="search-row">
+			<input type="text" id="user-search" placeholder="E-Mail filtern…" />
+		</div>
+		<table id="users-table">
+			<thead>
+				<tr>
+					<th>E-Mail</th>
+					<th>Links</th>
+					<th>Gesperrt</th>
+					<th>Erstellt</th>
+					<th>Aktionen</th>
+				</tr>
+			</thead>
+			<tbody id="users-tbody"></tbody>
+		</table>
+
+		<!-- Links -->
+		<h2>Links <button class="btn btn-reload" id="reload-links-btn">↻ Neu laden</button></h2>
+		<div class="search-row">
+			<input type="text" id="link-search" placeholder="URL / Code filtern…" />
+		</div>
+		<table id="links-table">
+			<thead>
+				<tr>
+					<th>Aktionen</th>
+					<th>Code</th>
+					<th>Ziel-URL</th>
+					<th>Status</th>
+					<th>Spam-Score</th>
+					<th>Aktiv</th>
+					<th>Klicks</th>
+					<th>User</th>
+					<th>Erstellt</th>
+				</tr>
+			</thead>
+			<tbody id="links-tbody"></tbody>
+		</table>
+		<div class="pagination" id="links-pagination">
+			<button id="links-prev-btn" disabled>← Zurück</button>
+			<span id="links-page-info"></span>
+			<button id="links-next-btn" disabled>Weiter →</button>
+		</div>
+	</div>
+</main>
+
+<script src="/user-administration.js"></script>
+</body>
+</html>

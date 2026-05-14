@@ -13,9 +13,12 @@ export default defineConfig({
 					GOOGLE_CLIENT_SECRET: "test-google-secret",
 					SESSION_SECRET: "test-session-secret",
 					WAECHTER_TOKEN: "test-waechter-token",
+					ADMIN_TOKEN: "test-admin-token",
 					// Injected at config time (Node.js) to avoid Workers node:fs
 					// Windows path issues. Used by the HTML pattern regression tests.
 					APP_HTML_CONTENT: readFileSync("./public/app.html", "utf-8"),
+					INDEX_HTML_CONTENT: readFileSync("./public/index.html", "utf-8"),
+					SW_JS_CONTENT: readFileSync("./public/sw.js", "utf-8"),
 				},
 			},
 		}),

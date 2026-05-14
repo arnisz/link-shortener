@@ -1,4 +1,4 @@
-﻿﻿﻿# Cloudflare Workers
+﻿# Cloudflare Workers
 
 STOP. Your knowledge of Cloudflare Workers APIs and limits may be outdated. Always retrieve current documentation before any Workers, KV, R2, D1, Durable Objects, Queues, Vectorize, AI, or Agents SDK task.
 
@@ -14,7 +14,7 @@ For all limits and quotas, retrieve from the product's `/platform/limits/` page.
 **aadd.li** â€” a serverless link shortener. Backend: Cloudflare Workers + D1. Frontend: static files in `public/` (SPA, served via Workers Assets).
 
 - Entry point: `src/index.ts` â€” plain `if`-chain router, no framework
-- Handlers: `src/handlers/` (`auth.ts`, `links.ts`, `internal.ts`, `warning.ts`)
+- Handlers: `src/handlers/` (`admin.ts`, `auth.ts`, `links.ts`, `internal.ts`, `warning.ts`)
 - Auth: Google OAuth (`src/auth/google.ts`, `src/auth/session.ts`)
 - CSRF protection: `src/csrf.ts` (`validateCsrf`, `validateCsrfToken`, `generateCsrfToken`, `validateMutationCsrf`, `generateSignedToken`, `verifySignedToken`)
 - Rate limiting: `src/rateLimit.ts` (`checkRateLimit`, `extractClientIp`)
@@ -69,6 +69,7 @@ npx wrangler d1 execute hello-cf-spa-db --local --file=sql/links_phase6_security
 npx wrangler d1 execute hello-cf-spa-db --local --file=sql/security_scans.sql
 npx wrangler d1 execute hello-cf-spa-db --local --file=sql/bypass_clicks.sql
 npx wrangler d1 execute hello-cf-spa-db --local --file=sql/links_phase6_revalidation_index.sql
+npx wrangler d1 execute hello-cf-spa-db --local --file=sql/admin.sql
 ```
 
 For remote (production): replace `--local` with `--remote`.
@@ -120,7 +121,7 @@ For remote (production): replace `--local` with `--remote`.
 - **Short codes**: 6-char alphanumeric, bias-free generation in `generateShortCode` (`src/validation.ts`).
 - **Hashtags**: Authenticated users can assign up to 10 tags per link (limit `TAG_MAX_PER_LINK`). Tags are normalized (NFKC, lowercase, leading # removed, trim), 1â€“50 chars, starting with alphanumeric `[a-z0-9][a-z0-9_-]*`. Tags are validated via `validateTag(raw)` in `src/validation.ts`. Tags are strictly user-scoped; orphaned tags are garbage collected after each mutation (`UPDATE`, `DELETE`). **Tag updates are full-replace**: sending `tags: []` removes all tags; sending `tags: ["foo"]` replaces all existing tags with `["foo"]`. D1 tag operations use **two-phase batching** because junction-table inserts (`link_tags`) need the AUTOINCREMENT `tag_id` â€” first batch inserts into `tags`, second batch inserts into `link_tags` using a `SELECT â€¦ WHERE name = ?` subquery.
 - **Search**: `GET /api/links?q=<term>` searches via case-insensitive substring in alias, title, and tag names. Term is trimmed and capped at 100 chars. Case-insensitivity is ensured via `LOWER()` in SQL.
-- **Alias reserved words**: `["api", "login", "logout", "app", "r", "stats", "warning"]` â€” checked in `ALIAS_RESERVED` (`src/validation.ts`). `stats` reserved for external stats/paywall worker. `warning` reserved for the Interstitial-Page route. Add every new top-level Worker path here immediately when introduced.
+- **Alias reserved words**: `["api", "login", "logout", "app", "r", "stats", "warning", "user-administration", "admin"]` â€” checked in `ALIAS_RESERVED` (`src/validation.ts`). `stats` reserved for external stats/paywall worker. `warning` reserved for the Interstitial-Page route. Add every new top-level Worker path here immediately when introduced.
 - **Logging**: use `log(category, message)` from `src/utils.ts`; it wraps `console.log` with `[category]` prefix. **Security constraints**: never log full cookie values, session IDs, OAuth tokens, or `SESSION_SECRET` â€” at most log the first 8 characters of a session ID for correlation (e.g. `sid=4fc38ab5â€¦`). On auth-related rejections, always include a short `reason` string (e.g. `session_not_found`, `expired`, `csrf_mismatch`) so Tail Logs are interpretable without consulting source code.
 - **HTML escaping**: use `escapeHtml(str)` from `src/utils.ts` for any user-supplied content embedded in HTML contexts. Mandatory for `target_url` on `/warning` (Stored-XSS vector).
 - **Ownership enforcement**: Update/delete queries include `AND user_id = ?` directly in the `WHERE` clause (atomic, prevents TOCTOU). `result.meta.changes === 0` returns 404 for both "not found" and "wrong owner" â€” intentionally no distinction to prevent user enumeration.
@@ -213,6 +214,91 @@ Retrieve API references and limits from:
 
 ---
 
+## Admin-Dashboard (`/user-administration`)
+
+> **Status:** implementiert âœ…. `ADMIN_TOKEN` ist in Cloudflare als Secret bereits angelegt.
+
+### Hintergrund
+
+Nach dem ersten Phishing-Missbrauch von aadd.li (Mai 2026) wurde ein administratives Dashboard als strukturelle LÃ¼cke erkannt. Das Dashboard ermÃ¶glicht dem Admin vollstÃ¤ndige Sicht auf alle Links und die Kontrolle Ã¼ber User-Accounts ohne direkten Datenbankzugriff.
+
+### Auth-Modell (Dual-Layer)
+
+Alle `/api/admin/*`-Endpunkte verlangen **beide** Bedingungen gleichzeitig:
+
+1. **GÃ¼ltige Google-OAuth-Session** (`__Host-sid` Cookie) â€“ wie bei normalen Endpunkten
+2. **`Authorization: Bearer ${ADMIN_TOKEN}`** â€“ im Request-Header, geprÃ¼ft gegen `env.ADMIN_TOKEN`
+
+Die Admin-SPA liest das Token aus einem Eingabefeld beim ersten Aufruf und speichert es im `sessionStorage` (nicht `localStorage`). Fehlt einer der beiden Faktoren, antwortet der Worker mit `401` (kein Detail-Hinweis).
+
+CSRF: Admin-Mutationen (`block`, `unblock`, `delete`) rufen zusÃ¤tzlich `validateMutationCsrf` auf â€“ identisch zu den User-Mutation-Endpunkten.
+
+Kein eigener Rate-Limit-Key â€“ Admin-Endpunkte sind nicht von auÃen brute-forcebar, da die Google-OAuth-Session als erster Faktor fungiert.
+
+### Handler
+
+Neuer Handler: `src/handlers/admin.ts`
+
+Exportierte Handler:
+
+| Funktion | Route | Beschreibung |
+|----------|-------|--------------|
+| `handleAdminGetLinks` | `GET /api/admin/links` | Alle Links aller User, cursor-paginiert (`cursor=ISO\|id&limit=N`, default 100, max 200). Gibt `user_email`, `user_id`, `short_code`, `target_url`, `status`, `is_active`, `click_count`, `created_at` zurÃ¼ck. |
+| `handleAdminGetUsers` | `GET /api/admin/users` | Alle User mit `link_count`, `is_blocked`, `created_at`, `email`. |
+| `handleAdminBlockUser` | `POST /api/admin/users/:id/block` | Setzt `is_blocked=1`, lÃ¶scht alle Sessions des Users (erzwingt Neu-Anmeldung). User-Datensatz und Links bleiben erhalten (User bleibt bekannt). |
+| `handleAdminUnblockUser` | `POST /api/admin/users/:id/unblock` | Setzt `is_blocked=0`. |
+| `handleAdminDeleteUser` | `DELETE /api/admin/users/:id` | LÃ¶scht User, alle Sessions und alle Links (CASCADE). Nicht rÃ¼ckgÃ¤ngig zu machen. |
+
+### Sperren vs. LÃ¶schen
+
+- **Sperren** (`is_blocked=1`): Sessions werden invalidiert (erzwungene Neu-Anmeldung). Beim Login-Callback prÃ¼ft `handleGoogleCallback` nach dem Upsert `is_blocked` â€“ wenn `1`, wird der Login mit 403 abgelehnt. User-Record und Links bleiben in D1 erhalten. Der Admin kennt den User weiterhin (E-Mail, erstellte Links, History).
+- **LÃ¶schen**: Unwiderruflich. Sinnvoll nach KlÃ¤rung oder wenn DSGVO-LÃ¶schantrag vorliegt.
+
+### DB-Schema-Ã“ndierung (`sql/admin.sql`)
+
+```sql
+ALTER TABLE users ADD COLUMN is_blocked INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX idx_users_is_blocked ON users(is_blocked) WHERE is_blocked = 1;
+```
+
+> `is_blocked` ist ein neues Feld in `users`. Es ist **kein Bestandteil des Wächter-Kontrakts** und beeinflusst nicht `links.status`.
+
+### `handleGoogleCallback`-Erweiterung
+
+Nach dem `INSERT OR IGNORE / UPDATE` (User-Upsert) muss `handleGoogleCallback` prÃ¼fen:
+
+```typescript
+const user = await env.hello_cf_spa_db.prepare(
+  'SELECT is_blocked FROM users WHERE id = ?'
+).bind(userId).first<{ is_blocked: number }>();
+
+if (user?.is_blocked === 1) {
+  return errResponse('Account gesperrt. Bitte Kontakt aufnehmen.', 403);
+}
+```
+
+Session-Cookie darf erst danach gesetzt werden.
+
+### Implementierungs-Reihenfolge
+
+1. Migration `sql/admin.sql` anlegen und lokal + remote anwenden
+2. `src/types.ts` â€“ `ADMIN_TOKEN: string` in `Env` ergÃ¤nzen
+3. `src/handlers/admin.ts` erstellen (alle 5 Handler)
+4. `src/index.ts` â€“ Router-EintrÃ¤ge fÃ¼r `/user-administration` und `/api/admin/*`
+5. `src/auth/google.ts` oder `src/handlers/auth.ts` â€“ `is_blocked`-Check in `handleGoogleCallback`
+6. `public/user-administration.html` â€“ Admin-SPA (Token-Eingabe, User-Tabelle, Link-Tabelle)
+7. Tests in `test/admin.spec.ts`
+
+### Sicherheitskonventionen fÃ¼r `/api/admin/*`
+
+- Auth-Helper: eigene Funktion `checkAdminAuth(request, env)` â€“ prÃ¼ft Session **und** `ADMIN_TOKEN`, gibt `userId | null` zurÃ¼ck
+- Bei Auth-Fehler immer generischer `401` ohne Detail (kein Hinweis welcher Faktor fehlschlug)
+- `DELETE /api/admin/users/:id` benÃ¶tigt Idempotenz: wenn User nicht existiert â€“ `404`, nicht `500`
+- `user-administration` und `admin` sind zu `ALIAS_RESERVED` hinzugefÃ¼gt â€“ nie als Short-Code verwendbar
+
+
+---
+
 ## WÃ¤chter-Dienst (Architekturkonzept v5)
 
 > **Status:** Phasen 1–6 implementiert und deployed. Wächter-Projekt (separates Repo, Python, Hetzner VPS) ist nächster Schritt (Phase 2 Wächter-Rollout).
@@ -300,6 +386,20 @@ Alle Werte mÃ¼ssen positive Integer sein: `1 â‰¤ h â‰¤ 8760`, `1 â‰
 **Response enthÃ¤lt zusÃ¤tzlich:** `click_count`, `created_at` (damit der WÃ¤chter eigene Priorisierungslogik implementieren kann ohne Folge-Query).
 
 **Jitter-Verantwortung liegt beim WÃ¤chter** (Â±15% auf `max_age_*`-Parameter), nicht beim Worker. Worker liefert nur "fÃ¤llig nach Schwellwert".
+
+### Burst-Revalidation fÃ¼r neue Links (verbindlich fÃ¼r das nÃ¤chste Feature-Update)
+
+Phishing-Kampagnen erzeugen oft einen Click-Burst in den ersten 3 bis 6 Stunden. Deshalb soll die nÃ¤chste Ausbaustufe zusÃ¤tzlich eine frÃ¼he NachprÃ¼fung auslÃ¶sen, wenn ein frisch angelegter Link schnell Reichweite aufbaut.
+
+- **Definition "neu":** `created_at` liegt hÃ¶chstens 6 Stunden zurÃ¼ck.
+- **Burst-Trigger:** `click_count >= 40` innerhalb dieses 6h-Fensters.
+- **Nur echte Re-Evaluation:** Die Burst-Regel greift nur fÃ¼r bereits mindestens einmal geprÃ¼fte Links (`checked = 1`). Der Initial-Scan fÃ¼r `checked = 0` bleibt die hÃ¶chste PrioritÃ¤t und darf durch den Burst-Mechanismus nie verdrÃ¤ngt werden.
+- **Verbindliche Priorisierung in der Pending-Query:** Die Burst-Revalidation ist als eigene PrioritÃ¤tsklasse direkt nach `checked = 0` einzuordnen und **vor jeder zeitbasierten Revalidation** (`warning`, `active`, `blocked`) zu claimen. Verbindliche Reihenfolge: `checked = 0` â†’ `neu + burst >= 40` â†’ stale `warning` â†’ stale `active` â†’ stale `blocked`.
+- **Einmal pro Frischefenster:** Sobald ein Link innerhalb der ersten 6 Stunden nach einem frÃ¼heren Scan die 40-Klick-Schwelle Ã¼berschreitet, wird genau **eine** vorgezogene NachprÃ¼fung fÃ¤llig. Derselbe Link darf bis zum Ende dieses 6h-Fensters nicht bei jedem weiteren Poll erneut claimed werden.
+- **Verbindliche Persistenz fÃ¼r den Einmal-Trigger:** Es ist eine persistierte Wasserstandsmarke erforderlich, voraussichtlich `last_scanned_click_count INTEGER NOT NULL DEFAULT 0` (oder funktional Ã¤quivalent). `handleInternalScanResult` schreibt nach jedem erfolgreichen Scan den zu diesem Zeitpunkt gÃ¼ltigen `click_count` in dieses Feld. Die Pending-Query muss damit eindeutig erkennen: `click_count >= 40 AND last_scanned_click_count < 40`.
+- **Kein neuer externer Parameter:** Die Schwellwerte `40 Klicks` und `6 Stunden` sind Teil des Worker-/Waechter-Kontrakts fÃ¼r diese Feature-Stufe und sollen in `src/config.ts` als benannte Konstanten dokumentiert werden statt in SQL oder Handlern hartcodiert zu werden.
+
+Rollenverteilung: Der Worker entscheidet, ob ein Link aufgrund des Burst-Kriteriums fÃ¤llig ist und claimt ihn in der richtigen PrioritÃ¤tsstufe. Der WÃ¤chter bewertet den geclaimten Link anschlieÃŸend normal mit seiner bestehenden Scan- und Scoring-Logik. Ein manueller Override bleibt verbindlich und schlieÃŸt auch diese Burst-Revalidation aus.
 
 ### `/api/internal/links/:id/scan-result` â€” `manual_override`-Verhalten (Phase 6, implementiert)
 
@@ -392,7 +492,7 @@ Der WÃ¤chter wird als **separates Projekt** entwickelt und betrieben. Kein WÃ
 | **4** | Google Safe Browsing als zweiter Provider | WÃ¤chter-Projekt | â³ ausstehend |
 | **5** | Interstitial-Page (`/warning`, `/warning/proceed`) | dieses Repo | âœ… done |
 | **5b** | `bypass_clicks`-Tabelle + Logging | dieses Repo | âœ… done |
-| **6** | Tiered Revalidation (pending-Query), manual_override Audit-Response, revalidation_aging Metrics | dieses Repo | ðŸ”œ next |
+| **6** | Tiered Revalidation (pending-Query), manual_override Audit-Response, revalidation_aging Metrics, Burst-Revalidation fÃ¼r neue Links (`>= 40` Klicks in `<= 6h`) | dieses Repo | ðŸ”œ next |
 | **7** | Push-Trigger (optional, nur bei messbarem TTFS-Problem) | beide | â¸ï¸ defer |
 
 ### Bewusst nicht im MVP
@@ -404,7 +504,7 @@ Der WÃ¤chter wird als **separates Projekt** entwickelt und betrieben. Kein WÃ
 - Kein mTLS zwischen Worker und WÃ¤chter
 - Kein `/api/internal/links/queue-size`-Endpoint (nachrÃ¼stbar ohne Breaking Change)
 - Kein Cloudflare Turnstile auf `POST /short` (defer bis Bot-Last messbar)
-- Kein Admin-Dashboard fÃ¼r Scans (`wrangler d1 execute` reicht)
+- Kein Scan-Admin-Dashboard mit Provider-Details (`wrangler d1 execute` reicht fÃ¼r Diagnose)
 
 ### Bypass-Click-Tracking (implementiert, Phase 5b, `sql/bypass_clicks.sql`)
 

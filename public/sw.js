@@ -1,4 +1,4 @@
-const CACHE = 'aadd-v4';
+const CACHE = 'aadd-v5';
 const STATIC = [
   '/', '/index.html', '/index.js',
   '/manifest.json', '/favicon.ico',
@@ -8,7 +8,7 @@ const STATIC = [
 // Always fetch fresh from network; cache is only a fallback when offline.
 const NETWORK_FIRST = ['/i18n.js', '/style.css', '/landing.css'];
 
-const NETWORK_ONLY = ['/api/', '/app.html', '/app.js'];
+const NETWORK_ONLY = ['/api/', '/app.html', '/app.js', '/login', '/logout', '/api/auth/google/callback'];
 
 self.addEventListener('install', e => e.waitUntil(
   caches.open(CACHE).then(c => c.addAll(STATIC))
@@ -22,6 +22,15 @@ self.addEventListener('activate', e => e.waitUntil(
 
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
+
+  if (e.request.mode === 'navigate' && (
+    url.pathname === '/login'
+    || url.pathname === '/logout'
+    || url.pathname === '/api/auth/google/callback'
+  )) {
+    e.respondWith(fetch(e.request));
+    return;
+  }
 
   if (NETWORK_ONLY.some(p => url.pathname.startsWith(p))) {
     e.respondWith(fetch(e.request));

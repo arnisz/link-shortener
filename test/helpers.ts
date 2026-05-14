@@ -68,7 +68,8 @@ export async function setupTestDb(db: D1Database): Promise<void> {
 			`name TEXT, ` +
 			`avatar_url TEXT, ` +
 			`created_at TEXT NOT NULL, ` +
-			`last_login_at TEXT NOT NULL)`
+			`last_login_at TEXT NOT NULL, ` +
+			`is_blocked INTEGER NOT NULL DEFAULT 0)`
 		)
 		.run();
 

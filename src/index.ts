@@ -3,6 +3,7 @@ import { handleGetMe, handleLogout, handleLogin, handleGoogleCallback } from "./
 import { handleCreateLink, handleGetLinks, handleUpdateLink, handleDeleteLink, handleRedirect, handleCreateAnonymousLink } from "./handlers/links";
 import { handleInternalHealth, handleInternalLinksPending, handleInternalScanResult, handleInternalReleaseStale, handleInternalMetrics, handleInternalUpdateUrlhaus } from "./handlers/internal";
 import { handleWarning, handleWarningProceed } from "./handlers/warning";
+import { handleAdminGetLinks, handleAdminGetUsers, handleAdminBlockUser, handleAdminUnblockUser, handleAdminDeleteUser, handleAdminUpdateLink, handleAdminDeleteLink } from "./handlers/admin";
 import { applySecurityHeaders, errResponse, log } from "./utils";
 import { validateCsrf } from "./csrf";
 
@@ -64,6 +65,23 @@ async function router(request: Request, env: Env, ctx: ExecutionContext): Promis
 
 	if (pathname === "/warning" && method === "GET") return handleWarning(request, env);
 	if (pathname === "/warning/proceed" && method === "GET") return handleWarningProceed(request, env, ctx);
+
+	// --- Admin-API ---
+	if (pathname === "/api/admin/links" && method === "GET") return handleAdminGetLinks(request, env);
+	if (pathname === "/api/admin/users" && method === "GET") return handleAdminGetUsers(request, env);
+
+	const adminBlockMatch = pathname.match(/^\/api\/admin\/users\/([0-9a-f]{32})\/block$/);
+	if (adminBlockMatch && method === "POST") return handleAdminBlockUser(adminBlockMatch[1], request, env);
+
+	const adminUnblockMatch = pathname.match(/^\/api\/admin\/users\/([0-9a-f]{32})\/unblock$/);
+	if (adminUnblockMatch && method === "POST") return handleAdminUnblockUser(adminUnblockMatch[1], request, env);
+
+	const adminDeleteMatch = pathname.match(/^\/api\/admin\/users\/([0-9a-f]{32})$/);
+	if (adminDeleteMatch && method === "DELETE") return handleAdminDeleteUser(adminDeleteMatch[1], request, env);
+
+	const adminLinkUpdateMatch = pathname.match(/^\/api\/admin\/links\/([a-zA-Z0-9_-]+)$/);
+	if (adminLinkUpdateMatch && method === "PATCH") return handleAdminUpdateLink(adminLinkUpdateMatch[1], request, env);
+	if (adminLinkUpdateMatch && method === "DELETE") return handleAdminDeleteLink(adminLinkUpdateMatch[1], request, env);
 
 	return new Response("Not found", { status: 404 });
 }

@@ -5,6 +5,7 @@ export interface Env {
 	GOOGLE_CLIENT_SECRET: string;
 	SESSION_SECRET: string;
 	WAECHTER_TOKEN: string;
+	ADMIN_TOKEN: string;
 	APP_BASE_URL: string;
 }
 

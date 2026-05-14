@@ -1,5 +1,291 @@
 # Status Log
 
+## 2026-05-14 — Planung: Burst-Revalidation fuer neue Links (40 Klicks in 6h)
+
+**Status:** geplant 🔜 — fuer das naechste Feature-Update vorgesehen, noch nicht implementiert
+
+### Anlass
+
+Phishing-Kampagnen erzeugen haeufig einen Klick-Burst in den ersten 3 bis 6 Stunden nach dem Anlegen eines Links. Die bestehende Revalidation priorisiert bislang nur `checked = 0` sowie spaetere statusbasierte Wiederpruefungen (`warning` 24h, `active` 14d, `blocked` 90d). Dadurch kann ein Link, der kurz nach dem ersten Scan ploetzlich stark angeklickt wird, zu lange im Status des ersten Checks verbleiben.
+
+### Zielbild / Pflichtenheft-Nachschärfung
+
+- **Neu** ist ein Link fuer die ersten **6 Stunden** ab `created_at`.
+- Wenn ein bereits mindestens einmal gescannter Link in diesem Fenster **40 oder mehr Klicks** erreicht, soll er fuer den Waechter sofort erneut faellig werden.
+- Diese Regel ist eine **beschleunigte Zweitbewertung**, kein Ersatz fuer den Initial-Scan von `checked = 0`.
+- Die Nachpruefung soll **genau einmal pro Link innerhalb des 6h-Fensters** ausgeloest werden — nicht bei jedem weiteren Poll, solange `click_count` ueber 40 bleibt.
+- Diese Revalidierung ist **bewusst priorisiert**: sie soll vor jeder zeitbasierten Revalidierung laufen, damit frueh eskalierende Kampagnen nicht hinter 24h-/14d-/90d-Schwellwerten warten muessen.
+
+### Geplante fachliche Regeln
+
+1. **Prioritaet:** `checked = 0` bleibt weiterhin vor allem anderen. Die neue Burst-Klasse kommt direkt danach und ist damit **hoeher priorisiert als jede zeitbasierte Revalidation**.
+2. **Eligibility:** Burst-Revalidation greift nur fuer `checked = 1`, damit wirklich eine erneute Bewertung stattfindet.
+3. **Fenster:** `created_at >= now - 6h`.
+4. **Schwelle:** `click_count >= 40`.
+5. **Einmaligkeit:** Der Worker braucht eine persistierte Wasserstandsmarke, damit die 40-Klick-Schwelle nur einmal als Trigger wirkt. Das ist kein Optimierungsdetail, sondern notwendiger Teil des Features.
+6. **Admin-Entscheidungen bleiben bindend:** `manual_override = 1` schliesst auch diese automatische Burst-Revalidation aus.
+
+### Verbindliche Priorisierungsreihenfolge fuer die spaetere Pending-Query
+
+1. `checked = 0`
+2. `checked = 1 AND created_at >= now - 6h AND click_count >= 40 AND last_scanned_click_count < 40`
+3. stale `warning`
+4. stale `active`
+5. stale `blocked`
+
+Innerhalb derselben Prioritaetsklasse bleibt die bestehende Sortierlogik erhalten: zuerst `click_count DESC`, danach `last_checked_at ASC NULLS FIRST`.
+
+### Geplante technische Anpassungen (noch nicht implementiert)
+
+- **Neue Persistenz in `links`:** ein Feld wie `last_scanned_click_count INTEGER NOT NULL DEFAULT 0` ist fuer diese Feature-Stufe fachlich erforderlich.
+  - Zweck: sauber erkennen, ob ein Link **seit dem letzten Scan** erstmals ueber die 40-Klick-Schwelle gestiegen ist.
+  - Zielbedingung fuer die Pending-Query: `click_count >= 40 AND last_scanned_click_count < 40`.
+- **`handleInternalScanResult`:** soll nach jedem erfolgreichen Scan den aktuellen `click_count` in diese Wasserstandsmarke uebernehmen, damit dieselbe Burst-Schwelle nicht mehrfach getriggert wird.
+- **`handleInternalLinksPending`:** bekommt eine zusaetzliche Prioritaetsklasse zwischen `checked = 0` und der 24h-`warning`-Revalidation; diese Klasse ist ausdruecklich als priorisierte Revalidierung fuer frische Hochreichweiten-Links zu behandeln.
+- **Konstanten statt Magic Numbers:** `40 Klicks` und `6 Stunden` sollen spaeter in `src/config.ts` als benannte Limits dokumentiert werden.
+- **Keine Aenderung an oeffentlichen Endpunkten:** Das Feature betrifft nur die interne Auswahl- und Revalidierungslogik zwischen Worker und Waechter.
+- **Verantwortungstrennung:** Der Worker entscheidet ueber Faelligkeit und Prioritaet; der Waechter behaelt die Verantwortung fuer die eigentliche Sicherheitsbewertung und das resultierende Scoring.
+
+### Vorgesehene Tests fuer die spaetere Implementierung
+
+- Link ist juenger als 6h, bereits gescannt, steigt von `< 40` auf `>= 40` Klicks -> wird von `/api/internal/links/pending` sofort zurueckgegeben.
+- Link ist juenger als 6h, hat bereits `>= 40` Klicks, wurde aber danach schon erneut gescannt -> wird **nicht** erneut wegen derselben Schwelle geclaimed.
+- Link ist aelter als 6h, auch bei `>= 40` Klicks -> keine Burst-Prioritaet mehr.
+- Link mit `manual_override = 1` -> nie Burst-Revalidation.
+- Sortierung: `checked = 0` bleibt vor Burst-Revalidation; Burst-Revalidation bleibt vor zeitbasierter `warning`/`active`/`blocked`-Revalidation.
+- Gleichstand innerhalb der Burst-Klasse: hoeherer `click_count` zuerst, dann aelterer `last_checked_at` zuerst.
+
+### Kompakte Implementierungsnotiz fuer den spaeteren Coding-Task
+
+1. **Migration anlegen:** neue Spalte in `links` fuer die Wasserstandsmarke einfuehren, voraussichtlich `last_scanned_click_count INTEGER NOT NULL DEFAULT 0`.
+2. **Konstanten definieren:** in `src/config.ts` benannte Konstanten fuer Burst-Schwelle und Frischefenster ergaenzen (`40` Klicks, `6` Stunden), damit keine Magic Numbers in SQL oder Handlern landen.
+3. **Pending-Query erweitern:** in `src/handlers/internal.ts` die Claim-Logik um eine eigene Burst-Prioritaetsklasse direkt nach `checked = 0` ergaenzen.
+4. **Einmal-Trigger absichern:** die Pending-Query muss explizit auf der Wasserstandsmarke basieren, damit dieselbe 40-Klick-Schwelle innerhalb des 6h-Fensters nicht mehrfach claimt.
+5. **Scan-Result-Writeback erweitern:** `handleInternalScanResult` soll nach erfolgreichem Scan den aktuellen `click_count` in `last_scanned_click_count` uebernehmen.
+6. **Index-/Query-Plan pruefen:** falls noetig zusaetzlichen Index fuer die neue Prioritaetsklasse vorsehen, damit Burst-Revalidation nicht zu einem Full Table Scan degeneriert.
+7. **Tests erweitern:** `test/internal.spec.ts` um Prioritaetsreihenfolge, Einmal-Trigger, 6h-Fenster, `manual_override` und Gleichstand-Sortierung ergaenzen.
+8. **Doku nachziehen:** nach Implementierung `AGENTS.md` und `status.md` von „geplant“ auf „implementiert“ aktualisieren.
+
+### Dokumentarische Migrationsskizze (noch nicht implementieren)
+
+Die folgende Skizze ist als Arbeitsgrundlage fuer das spaetere Feature-Update gedacht. Sie ist **kein** Umsetzungsauftrag fuer diesen Task, sondern dokumentiert nur die beabsichtigte Struktur.
+
+```sql
+-- Beispiel fuer eine zusaetzliche Migration im links-Kontext:
+ALTER TABLE links
+  ADD COLUMN last_scanned_click_count INTEGER NOT NULL DEFAULT 0;
+
+-- Optional/zu pruefen: zusaetzlicher Index, falls D1 fuer die neue
+-- Burst-Prioritaetsklasse sonst zu viele Zeilen scannen muss.
+-- Der exakte Index sollte erst nach Query-Plan-Pruefung festgelegt werden.
+-- Beispielrichtung:
+-- CREATE INDEX idx_links_burst_revalidation
+--   ON links(checked, manual_override, created_at, click_count, last_scanned_click_count, claimed_at);
+```
+
+**Absicht der Migration:**
+
+- `last_scanned_click_count` speichert den beim letzten erfolgreichen Scan bekannten Klickstand.
+- Damit wird aus einer fluechtigen Reichweitenbeobachtung ein persistierbarer, eindeutig pruefbarer Trigger.
+- Ohne dieses Feld waere die Einmaligkeit des Burst-Triggers innerhalb des 6h-Fensters nicht robust herstellbar.
+
+### Dokumentarische Pending-Query-/SQL-Skizze (noch nicht implementieren)
+
+Auch die folgende Query ist bewusst als **Skizze** formuliert. Sie soll die Zielrichtung der spaeteren Implementierung festhalten, nicht bereits finalen produktiven SQL-Code liefern.
+
+```sql
+UPDATE links
+SET claimed_at = datetime('now')
+WHERE id IN (
+  SELECT id
+  FROM links
+  WHERE claimed_at IS NULL
+	AND manual_override = 0
+	AND (
+	  checked = 0
+	  OR (
+		checked = 1
+		AND created_at >= datetime('now', '-6 hours')
+		AND click_count >= 40
+		AND last_scanned_click_count < 40
+	  )
+	  OR (
+		status = 'warning'
+		AND last_checked_at < datetime('now', '-24 hours')
+	  )
+	  OR (
+		status = 'active'
+		AND last_checked_at < datetime('now', '-14 days')
+	  )
+	  OR (
+		status = 'blocked'
+		AND last_checked_at < datetime('now', '-90 days')
+	  )
+	)
+  ORDER BY
+	CASE
+	  WHEN checked = 0 THEN 1
+	  WHEN checked = 1
+		AND created_at >= datetime('now', '-6 hours')
+		AND click_count >= 40
+		AND last_scanned_click_count < 40 THEN 2
+	  WHEN status = 'warning'
+		AND last_checked_at < datetime('now', '-24 hours') THEN 3
+	  WHEN status = 'active'
+		AND last_checked_at < datetime('now', '-14 days') THEN 4
+	  WHEN status = 'blocked'
+		AND last_checked_at < datetime('now', '-90 days') THEN 5
+	  ELSE 99
+	END,
+	click_count DESC,
+	last_checked_at ASC NULLS FIRST
+  LIMIT ?
+)
+RETURNING id, short_code, target_url, click_count, created_at, last_checked_at, status;
+```
+
+**Wichtige Hinweise zu dieser Skizze:**
+
+- Die Burst-Klasse ist absichtlich **zwischen** `checked = 0` und der `warning`-Revalidation eingeordnet.
+- `last_scanned_click_count < 40` repraesentiert den Einmal-Trigger. Dadurch wird nicht jeder weitere Poll nach Ueberschreiten der Schwelle erneut faellig.
+- Die konkrete Verwendung von `datetime(...)` vs. ISO-Vergleich muss bei der spaeteren Umsetzung gegen das reale Datumsformat in `links.created_at` und `links.last_checked_at` geprueft werden, da dieses Projekt vertraglich ISO-8601 mit Millisekunden und `Z`-Suffix verwendet.
+- Es ist moeglich, dass der finale Worker-Code statt eines einzelnen SQL-Statements eine leicht angepasste D1-kompatible Form braucht. Diese Sektion beschreibt daher **Logik und Priorisierung**, nicht die endgueltige Syntax.
+
+### Dokumentarische Scan-Result-Skizze (noch nicht implementieren)
+
+Fachliche Zielrichtung fuer den spaeteren Update-Pfad in `handleInternalScanResult`:
+
+```sql
+UPDATE links
+SET
+  checked = 1,
+  spam_score = ?,
+  status = ?,
+  last_checked_at = ?,
+  claimed_at = NULL,
+  last_scanned_click_count = click_count
+WHERE id = ?
+  AND manual_override = 0;
+```
+
+**Absicht dieser Skizze:**
+
+- Nach einem erfolgreichen Scan wird der aktuelle Klickstand als neue Wasserstandsmarke gespeichert.
+- Dadurch kann derselbe Link erst dann erneut durch den Burst-Mechanismus faellig werden, wenn eine spaetere Produktstufe bewusst eine neue Schwellwertlogik einfuehrt.
+- Fuer die jetzt geplante Feature-Stufe gilt damit klar: **eine** Burst-Nachpruefung pro Link innerhalb des 6h-Fensters.
+
+---
+
+## 2026-05-14 — Erweiterung: Admin-Dashboard – Link-Verwaltung (Status, Spam-Score, Löschen)
+
+**Status:** implementiert ✅
+
+### Anlass
+
+Das Admin-Dashboard war bisher auf User-Management (sperren/entsperren/löschen) beschränkt. Links konnten nur gelesen, nicht bearbeitet oder gelöscht werden. Nach dem ersten Phishing-Vorfall (Mai 2026) wurde der Bedarf erkannt, Links direkt aus dem Dashboard zu verwalten.
+
+### Neue Features
+
+**Status-Änderung per Dropdown:**
+- Jede Link-Zeile hat ein `<select>` mit den Optionen `active`, `warning`, `blocked`
+- Änderung sendet `PATCH /api/admin/links/:code` mit `{ status }` im Body
+- Setzt `manual_override=1` → der Wächter überschreibt den Status nicht mehr automatisch
+- Invalidiert den KV-Cache sofort (kein 5-Minuten-Drift)
+
+**Spam-Score-Bearbeitung:**
+- Jede Link-Zeile zeigt den aktuellen `spam_score` (0.00–1.00) in einem Number-Input
+- Speichern-Button (✓) sendet `PATCH /api/admin/links/:code` mit `{ spam_score }`
+- Validierung: Wert muss im Bereich [0, 1] liegen
+
+**Link löschen:**
+- Button 🗑 am Zeilenanfang
+- Sendet `DELETE /api/admin/links/:code`
+- Löscht den Link cross-user (kein `user_id`-Filter)
+- Invalidiert KV-Cache
+
+### API-Endpunkte
+
+| Method | Path | Handler |
+|--------|------|---------|
+| `PATCH` | `/api/admin/links/:code` | `handleAdminUpdateLink` — setzt `status` und/oder `spam_score`, `manual_override=1`, KV-Invalidierung |
+| `DELETE` | `/api/admin/links/:code` | `handleAdminDeleteLink` — löscht Link per `short_code`, KV-Invalidierung |
+
+### Geänderte Dateien
+
+- `src/handlers/admin.ts`: 2 neue Handler (`handleAdminUpdateLink`, `handleAdminDeleteLink`)
+- `src/index.ts`: 2 neue Router-Einträge
+- `public/user-administration.html`: Neue Tabellenspalten "Aktionen" + "Spam-Score", Status-Dropdown
+- `public/user-administration.js`: Event-Handler für change (Status-Dropdown) und click (Delete, Save-Score)
+- `test/admin.spec.ts`: 10 neue Tests (PATCH + DELETE Links, spam_score in GET)
+
+### Tests
+
+- 448 Tests, alle bestanden
+- Neue Tests: Status-Update, Spam-Score-Update, invalid status (400), score out of range (400), nicht existenter Link (404), unauthorized (401)
+
+---
+
+## 2026-05-14 — Implementierung: Admin-Dashboard (`/user-administration`)
+
+**Status:** implementiert ✅ — `ADMIN_TOKEN` bereits in Cloudflare als Secret angelegt
+
+### Anlass
+
+Erster bestätigter Phishing-Missbrauch von aadd.li (Mai 2026): Ein User nutzte den Dienst zur Verbreitung eines Phishing-Links. Der Angriff wurde manuell gestoppt (Direktzugriff auf D1 / Cloudflare Dashboard). Als strukturelle Lücke wurde das Fehlen eines Admin-Interfaces identifiziert, das Link-Übersicht, User-Sperrung und -Löschung ohne direkten DB-Zugriff ermöglicht.
+
+### Designentscheidungen
+
+**Sperren vs. Löschen:**
+- **Sperren** (`is_blocked=1`): Sessions werden invalidiert (erzwungene Neu-Anmeldung). Login-Callback lehnt gesperrte User mit 403 ab. User-Datensatz und Links bleiben erhalten — der Admin kennt den Angreifer weiterhin (E-Mail, erstellte Links, Zeitstempel). Bevorzugte Aktion bei Missbrauch.
+- **Löschen**: Unwiderruflich. Für DSGVO-Löschanträge oder nach abgeschlossener Klärung.
+
+**Auth-Modell (Dual-Layer):**
+- Faktor 1: Gültige Google-OAuth-Session (`__Host-sid`)
+- Faktor 2: `Authorization: Bearer ${ADMIN_TOKEN}` (Cloudflare Secret, bereits angelegt)
+- Beide Faktoren gleichzeitig erforderlich — fehlt einer: generischer `401`
+
+**Endpunkt:** `https://aadd.li/user-administration` (Admin-SPA, statisch in `public/`)
+
+### Geplante Änderungen
+
+#### DB-Migration (`sql/admin.sql`)
+
+```sql
+ALTER TABLE users ADD COLUMN is_blocked INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX idx_users_is_blocked ON users(is_blocked) WHERE is_blocked = 1;
+```
+
+#### Neuer Handler `src/handlers/admin.ts`
+
+| Funktion | Route |
+|----------|-------|
+| `handleAdminGetLinks` | `GET /api/admin/links` |
+| `handleAdminGetUsers` | `GET /api/admin/users` |
+| `handleAdminBlockUser` | `POST /api/admin/users/:id/block` |
+| `handleAdminUnblockUser` | `POST /api/admin/users/:id/unblock` |
+| `handleAdminDeleteUser` | `DELETE /api/admin/users/:id` |
+
+#### Weitere Änderungen
+
+- `src/types.ts`: `ADMIN_TOKEN: string` in `Env`
+- `src/index.ts`: Router-Einträge für `/user-administration` und `/api/admin/*`
+- `src/handlers/auth.ts` (`handleGoogleCallback`): `is_blocked`-Check nach User-Upsert — wenn `1`, Login mit 403 ablehnen, kein Session-Cookie setzen
+- `src/validation.ts`: `ALIAS_RESERVED` um `"user-administration"` und `"admin"` erweitern
+- `public/user-administration.html`: Admin-SPA mit Token-Eingabe, User-Tabelle (sperren/entsperren/löschen), Link-Tabelle
+- `test/admin.spec.ts`: neue Testsuite
+
+### Implementierungs-Reihenfolge
+
+1. Migration `sql/admin.sql` anlegen und anwenden (lokal + remote)
+2. `Env`-Interface erweitern
+3. `handleGoogleCallback` härten (`is_blocked`-Check)
+4. `src/handlers/admin.ts` implementieren
+5. Router-Einträge in `src/index.ts`
+6. `public/user-administration.html`
+7. Tests
+
+---
+
 ## 2026-05-09 — Implementierung: CSRF-Härtung Bugfix 9.5.26-1 + 9.5.26-2
 
 **Status:** implementiert ✅
@@ -10,9 +296,9 @@
 
 - **`src/handlers/auth.ts`**: `validateMutationCsrf` importiert; `handleLogout` ruft `validateMutationCsrf(request, env)` vor dem Session-Delete auf. Bei CSRF-Fehler wird die Fehler-Response sofort zurückgegeben, die Session bleibt erhalten.
 - **`test/index.spec.ts`**: `generateCsrfToken` importiert. Bestehende Logout-Tests angepasst (Beschreibungen präzisiert, "deletes session"-Test sendet jetzt gültigen CSRF-Token + Origin). 3 neue Tests:
-  - `POST /logout` mit Origin aber ohne X-CSRF-Token → 403, Session bleibt
-  - `POST /logout` mit Origin + nur X-Requested-With → 403
-  - `POST /logout` mit fremdem Origin → 403
+	- `POST /logout` mit Origin aber ohne X-CSRF-Token → 403, Session bleibt
+	- `POST /logout` mit Origin + nur X-Requested-With → 403
+	- `POST /logout` mit fremdem Origin → 403
 
 ### Bugfix 9.5.26-2 — `fix(csrf): do not accept X-Requested-With as substitute for X-CSRF-Token`
 
@@ -98,19 +384,19 @@ Im Security Review wurden zwei bestätigte CSRF-bezogene Härtungspunkte identif
 #### Implementierung
 
 - **`src/index.ts`** — `scheduled`-Handler um zweiten Cleanup-Block erweitert:
-  - Loop 1: `DELETE FROM security_scans WHERE raw_score < 0.3 AND scanned_at < datetime('now', '-7 days')` in 1000er-Batches
-  - Loop 2: `DELETE FROM security_scans WHERE raw_score >= 0.3 AND scanned_at < datetime('now', '-90 days')` in 1000er-Batches
-  - Fehler im security_scans-Cleanup werfen keinen Fehler im anonymous-links-Cleanup und umgekehrt (zwei unabhängige try/catch-Blöcke)
+	- Loop 1: `DELETE FROM security_scans WHERE raw_score < 0.3 AND scanned_at < datetime('now', '-7 days')` in 1000er-Batches
+	- Loop 2: `DELETE FROM security_scans WHERE raw_score >= 0.3 AND scanned_at < datetime('now', '-90 days')` in 1000er-Batches
+	- Fehler im security_scans-Cleanup werfen keinen Fehler im anonymous-links-Cleanup und umgekehrt (zwei unabhängige try/catch-Blöcke)
 
 #### Tests
 
 - **`test/index.spec.ts`** — 6 neue Tests im `describe("scheduled – security_scans retention")`:
-  - Low-risk (< 0.3) älter als 7d → gelöscht
-  - Low-risk jünger als 7d → bleibt
-  - High-risk (≥ 0.3) älter als 90d → gelöscht
-  - High-risk jünger als 90d → bleibt
-  - Grenzfall score = 0.3 → high-risk → bleibt (< 90d)
-  - Frische Einträge beider Klassen → beide bleiben
+	- Low-risk (< 0.3) älter als 7d → gelöscht
+	- Low-risk jünger als 7d → bleibt
+	- High-risk (≥ 0.3) älter als 90d → gelöscht
+	- High-risk jünger als 90d → bleibt
+	- Grenzfall score = 0.3 → high-risk → bleibt (< 90d)
+	- Frische Einträge beider Klassen → beide bleiben
 
 ### Tests
 
@@ -143,8 +429,8 @@ Im Security Review wurden zwei bestätigte CSRF-bezogene Härtungspunkte identif
 #### Tests
 
 - **`test/index.spec.ts`** — 6 neue Tests in zwei `describe`-Blöcken:
-  - `KV-Cache-Invalidierung – DELETE`: KV-Eintrag nach delete entfernt; andere Codes unangetastet
-  - `KV-Cache-Invalidierung – UPDATE`: KV-Eintrag nach is_active-Toggle, Alias-Änderung (alter + neuer Code), title-Update jeweils entfernt
+	- `KV-Cache-Invalidierung – DELETE`: KV-Eintrag nach delete entfernt; andere Codes unangetastet
+	- `KV-Cache-Invalidierung – UPDATE`: KV-Eintrag nach is_active-Toggle, Alias-Änderung (alter + neuer Code), title-Update jeweils entfernt
 
 ### Tests
 
@@ -324,11 +610,11 @@ v4 §3.4 Strategie 3 (Reserve-Option) hat `link_id INTEGER` — muss `TEXT` sein
 ## 2026-05-01 — Phase 1 Wächter-Integration: `/api/internal/*`-Endpunkte implementiert
 
 - Neuer Handler `src/handlers/internal.ts` mit allen 5 Endpunkten vollständig implementiert:
-  - `GET /api/internal/health` — 200 OK `{ ok: true }`, Bearer-Auth
-  - `GET /api/internal/links/pending?limit=N` — atomisches UPDATE … RETURNING (claimed_at = now()), limit 1–100
-  - `POST /api/internal/links/:id/scan-result` — schreibt `checked`, `spam_score`, `status`, `last_checked_at`, löscht `claimed_at`, `INSERT INTO security_scans`, invalidiert KV-Cache
-  - `POST /api/internal/links/release-stale` — gibt `claimed_at > 10 min` zurück, liefert `{ released: N }`
-  - `GET /api/internal/metrics` — Queue-Tiefe, Scans 24h, Status-Verteilung per DB-Batch-Query
+	- `GET /api/internal/health` — 200 OK `{ ok: true }`, Bearer-Auth
+	- `GET /api/internal/links/pending?limit=N` — atomisches UPDATE … RETURNING (claimed_at = now()), limit 1–100
+	- `POST /api/internal/links/:id/scan-result` — schreibt `checked`, `spam_score`, `status`, `last_checked_at`, löscht `claimed_at`, `INSERT INTO security_scans`, invalidiert KV-Cache
+	- `POST /api/internal/links/release-stale` — gibt `claimed_at > 10 min` zurück, liefert `{ released: N }`
+	- `GET /api/internal/metrics` — Queue-Tiefe, Scans 24h, Status-Verteilung per DB-Batch-Query
 - Authentifizierung via `WAECHTER_TOKEN` (Bearer), Rate-Limit 60 req/min per Token (`checkRateLimit("internal:token", ...)`)
 - Router in `src/index.ts` aktualisiert (Platzhalter durch echte Handler ersetzt)
 - `WAECHTER_TOKEN: string` zu `src/types.ts` und `vitest.config.mts` (Test-Binding `"test-waechter-token"`) hinzugefügt
@@ -389,13 +675,13 @@ Alle **387 Tests** grün (8 Suites). Deployed: Version `5fa2b72f-ad97-415e-bfc1-
 
 - **`src/config.ts`**: Drei neue Konstanten: `GLOBAL_INSERT_CAP = 1000`, `QUEUE_DEPTH_THROTTLE_LIMIT = 5000`, `QUEUE_DEPTH_CACHE_TTL_MS = 30_000`
 - **`src/handlers/links.ts`**: Zwei neue private Backpressure-Helper + zwei Test-Hilfsfunktionen:
-  - `checkGlobalInsertCap(env)` — Schicht 2: KV-Minute-Bucket (`insert_count:<bucket>`, TTL 120 s), 503 bei Überschreitung; **Fails open** bei KV-Fehler
-  - `checkQueueDepthThrottle(db)` — Schicht 3: `COUNT(*) WHERE checked=0 AND claimed_at IS NULL`, 30 s Modul-Scope-Cache, 503 bei Überschreitung; **Fails open** bei DB-Fehler
-  - `_resetQueueDepthCache()` + `_setQueueDepthCacheForTest(depth)` — Testhelper für Cache-Isolation und Cache-Injektion
-  - Beide Checks in `handleCreateAnonymousLink` und `handleCreateLink` eingebaut (Schicht 3 vor Schicht 2, damit der Throttle zuerst greift)
+	- `checkGlobalInsertCap(env)` — Schicht 2: KV-Minute-Bucket (`insert_count:<bucket>`, TTL 120 s), 503 bei Überschreitung; **Fails open** bei KV-Fehler
+	- `checkQueueDepthThrottle(db)` — Schicht 3: `COUNT(*) WHERE checked=0 AND claimed_at IS NULL`, 30 s Modul-Scope-Cache, 503 bei Überschreitung; **Fails open** bei DB-Fehler
+	- `_resetQueueDepthCache()` + `_setQueueDepthCacheForTest(depth)` — Testhelper für Cache-Isolation und Cache-Injektion
+	- Beide Checks in `handleCreateAnonymousLink` und `handleCreateLink` eingebaut (Schicht 3 vor Schicht 2, damit der Throttle zuerst greift)
 - **`test/backpressure.spec.ts`** (neu, 11 Tests):
-  - Schicht 2: Normal (201), KV voll → 503, KV-Fehler → Fails open, Counter-Increment-Verifizierung
-  - Schicht 3: Normal (201), Cache-Inject → 503 (anonym + auth), Cache-Reset → neu abfragen, Cached-Ergebnis persistiert
+	- Schicht 2: Normal (201), KV voll → 503, KV-Fehler → Fails open, Counter-Increment-Verifizierung
+	- Schicht 3: Normal (201), Cache-Inject → 503 (anonym + auth), Cache-Reset → neu abfragen, Cached-Ergebnis persistiert
 
 ### Test-Ergebnis
 
@@ -468,10 +754,10 @@ Wenn der Wächter einen Link von `blocked` auf `warning` hochstuft, erschien fü
 - **Änderung**: Neuer Test, der `stats` als reservierten Alias ablehnt (erwartet HTTP 400).
 - **Datei**: `AGENTS.md`
 - **Änderung**: Vier neue/erweiterte Abschnitte:
-  1. **Data Format Contracts** — Tabelle mit exakten Formaten (Regex, Generator-Funktion, Beispiel) für alle D1-Felder, die von externen Konsumenten gelesen werden können (`users.id`, `sessions.id`, `sessions.expires_at` etc.).
-  2. **Alias reserved words** — `stats` ergänzt, Begründung dokumentiert.
-  3. **Shared Database Consumers** — Expliziter Hinweis, dass diese D1 auch von einem externen Stats-/Paywall-Worker gelesen wird; Schema-Änderungen sind Breaking Changes.
-  4. **Logging conventions** — Sicherheitsregeln: keine vollständigen Cookie-/Session-Werte loggen; bei Auth-Rejects `reason`-String mit-loggen.
+	1. **Data Format Contracts** — Tabelle mit exakten Formaten (Regex, Generator-Funktion, Beispiel) für alle D1-Felder, die von externen Konsumenten gelesen werden können (`users.id`, `sessions.id`, `sessions.expires_at` etc.).
+	2. **Alias reserved words** — `stats` ergänzt, Begründung dokumentiert.
+	3. **Shared Database Consumers** — Expliziter Hinweis, dass diese D1 auch von einem externen Stats-/Paywall-Worker gelesen wird; Schema-Änderungen sind Breaking Changes.
+	4. **Logging conventions** — Sicherheitsregeln: keine vollständigen Cookie-/Session-Werte loggen; bei Auth-Rejects `reason`-String mit-loggen.
 ---
 
 ## 2026-05-02 — Phase 6 Wächter-Integration: Tiered Revalidation, Manual Override Audit, revalidation_aging Metrics
@@ -481,10 +767,10 @@ Wenn der Wächter einen Link von `blocked` auf `warning` hochstuft, erschien fü
 #### 6.1 — Tiered Revalidation in `handleInternalLinksPending`
 
 - **`src/handlers/internal.ts`** (`handleInternalLinksPending`): Pending-Query von einfachem `checked=0 OR last_checked_at < 30d` auf 4 Prioritätsklassen erweitert:
-  - Prio 1: `checked = 0` (neue Links, sofort scannen)
-  - Prio 2: `status = 'warning'`, `last_checked_at` älter als `max_age_warning_h` Stunden (Default 24h)
-  - Prio 3: `status = 'active'`, `last_checked_at` älter als `max_age_active_d` Tagen (Default 14d)
-  - Prio 4: `status = 'blocked'`, `last_checked_at` älter als `max_age_blocked_d` Tagen (Default 90d)
+	- Prio 1: `checked = 0` (neue Links, sofort scannen)
+	- Prio 2: `status = 'warning'`, `last_checked_at` älter als `max_age_warning_h` Stunden (Default 24h)
+	- Prio 3: `status = 'active'`, `last_checked_at` älter als `max_age_active_d` Tagen (Default 14d)
+	- Prio 4: `status = 'blocked'`, `last_checked_at` älter als `max_age_blocked_d` Tagen (Default 90d)
 - Schwellwerte kommen als Query-Parameter vom Wächter; Validierung im Worker (Grenzen: `1 ≤ h ≤ 8760`, `1 ≤ d ≤ 3650`), 400 bei ungültigen Werten
 - Sortierung innerhalb gleicher Prio-Klasse: `click_count DESC`, dann `last_checked_at ASC NULLS FIRST`
 - Response um `click_count` erweitert (war bereits `created_at` vorhanden)
@@ -505,13 +791,13 @@ Wenn der Wächter einen Link von `blocked` auf `warning` hochstuft, erschien fü
 ### Tests
 
 - **`test/internal.spec.ts`**: 15 neue Tests (vorher 30, jetzt 44 in dieser Suite):
-  - `seedHexLink` um `lastCheckedAt` und `clickCount` erweitert
-  - `click_count` im bestehenden Pending-Test geprüft
-  - `does not return already-checked links (unless stale)`: `lastCheckedAt` auf "jetzt" gesetzt (sonst gilt `NULL` als stale in Prio 3-4)
-  - 4 Tests für Query-Parameter-Validierung (400 bei out-of-range)
-  - 4 Tests für Tiered Revalidation (Prio-Reihenfolge, warning-Schwellwert, frische Links, click_count-Sortierung)
-  - Manual Override: Response `{ ok, applied: false, reason }` + `links.status` unverändert + `security_scans` vorhanden
-  - 4 Tests für `revalidation_aging` (Struktur, `never_scanned`, `overdue_gt_24h`, `manual_override`-Ausschluss)
+	- `seedHexLink` um `lastCheckedAt` und `clickCount` erweitert
+	- `click_count` im bestehenden Pending-Test geprüft
+	- `does not return already-checked links (unless stale)`: `lastCheckedAt` auf "jetzt" gesetzt (sonst gilt `NULL` als stale in Prio 3-4)
+	- 4 Tests für Query-Parameter-Validierung (400 bei out-of-range)
+	- 4 Tests für Tiered Revalidation (Prio-Reihenfolge, warning-Schwellwert, frische Links, click_count-Sortierung)
+	- Manual Override: Response `{ ok, applied: false, reason }` + `links.status` unverändert + `security_scans` vorhanden
+	- 4 Tests für `revalidation_aging` (Struktur, `never_scanned`, `overdue_gt_24h`, `manual_override`-Ausschluss)
 - Alle **400 Tests** grün (8 Suites)
 
 ---

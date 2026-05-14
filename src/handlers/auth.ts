@@ -178,6 +178,16 @@ async function processGoogleCallback(
 	}
 
 	const userId = await upsertUserFromGoogle(payload, env);
+
+	const blockedRow = await env.hello_cf_spa_db
+		.prepare('SELECT is_blocked FROM users WHERE id = ?')
+		.bind(userId)
+		.first<{ is_blocked: number }>();
+	if (blockedRow?.is_blocked === 1) {
+		log("AUTH", `Login rejected: reason=account_blocked uid=${userId.slice(0, 8)}…`);
+		return { success: false, response: errResponse('Account gesperrt. Bitte Kontakt aufnehmen.', 403) };
+	}
+
 	const { sessionId } = await createSession(userId, env);
 
 	return { success: true, userId, sessionId };
