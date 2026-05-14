@@ -91,26 +91,31 @@ async function seedHexLink(opts: {
 	claimedAt?: string | null;
 	lastCheckedAt?: string | null;
 	clickCount?: number;
+	lastScannedClickCount?: number;
+	/** Override created_at (ISO-8601). Defaults to now. */
+	createdAt?: string;
 }): Promise<{ id: string; shortCode: string }> {
 	const id = hexId();
 	const now = new Date().toISOString();
+	const createdAt = opts.createdAt ?? now;
 	await env.hello_cf_spa_db
 		.prepare(
-			`INSERT INTO links (id, user_id, short_code, target_url, title, created_at, updated_at, click_count, expires_at, is_active, checked, status, manual_override, claimed_at, last_checked_at)
-			 VALUES (?, ?, ?, ?, NULL, ?, ?, ?, NULL, 1, ?, ?, ?, ?, ?)`
+			`INSERT INTO links (id, user_id, short_code, target_url, title, created_at, updated_at, click_count, expires_at, is_active, checked, status, manual_override, claimed_at, last_checked_at, last_scanned_click_count)
+			 VALUES (?, ?, ?, ?, NULL, ?, ?, ?, NULL, 1, ?, ?, ?, ?, ?, ?)`
 		)
 		.bind(
 			id,
 			opts.userId,
 			opts.shortCode,
 			opts.targetUrl ?? "https://example.com",
-			now, now,
+			createdAt, now,
 			opts.clickCount ?? 0,
 			opts.checked ?? 0,
 			opts.status ?? "active",
 			opts.manualOverride ?? 0,
 			opts.claimedAt ?? null,
-			opts.lastCheckedAt ?? null
+			opts.lastCheckedAt ?? null,
+			opts.lastScannedClickCount ?? 0
 		)
 		.run();
 	return { id, shortCode: opts.shortCode };
@@ -337,6 +342,263 @@ describe("GET /api/internal/links/pending", () => {
 		// Higher click_count must come first
 		expect(data.links[0].id).toBe(highId);
 		expect(data.links.map(l => l.id)).not.toContain(lowId);
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/internal/links/pending — Burst-Revalidation (Prio 2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("GET /api/internal/links/pending — Burst-Revalidation", () => {
+	/**
+	 * Returns an ISO-8601 timestamp offset from now.
+	 * hoursAgo > 0 → in the past, hoursAgo < 0 → in the future.
+	 */
+	function hoursAgoIso(hoursAgo: number): string {
+		return new Date(Date.now() - hoursAgo * 60 * 60 * 1000).toISOString();
+	}
+
+	it("returns a fresh link (< 6h) with click_count >= 40 and last_scanned_click_count < 40", async () => {
+		const { userId } = await seedSession(env.hello_cf_spa_db);
+		const { id } = await seedHexLink({
+			userId,
+			shortCode: "burst1",
+			checked: 1,
+			status: "active",
+			clickCount: 45,
+			lastScannedClickCount: 0,
+			createdAt: hoursAgoIso(3), // 3 hours ago — within 6h window
+			lastCheckedAt: hoursAgoIso(3),
+		});
+
+		const res = await call(bearerRequest("/api/internal/links/pending"));
+		expect(res.status).toBe(200);
+		const data = await res.json<{ links: { id: string }[] }>();
+		expect(data.links.map(l => l.id)).toContain(id);
+	});
+
+	it("does NOT return a link where last_scanned_click_count >= 40 (burst already triggered)", async () => {
+		const { userId } = await seedSession(env.hello_cf_spa_db);
+		await seedHexLink({
+			userId,
+			shortCode: "burst2",
+			checked: 1,
+			status: "active",
+			clickCount: 50,
+			lastScannedClickCount: 45, // already scanned after crossing threshold
+			createdAt: hoursAgoIso(3),
+			lastCheckedAt: hoursAgoIso(2),
+		});
+
+		const res = await call(bearerRequest("/api/internal/links/pending"));
+		expect(res.status).toBe(200);
+		const data = await res.json<{ links: unknown[] }>();
+		expect(data.links).toEqual([]);
+	});
+
+	it("does NOT return a fresh link with click_count < 40", async () => {
+		const { userId } = await seedSession(env.hello_cf_spa_db);
+		await seedHexLink({
+			userId,
+			shortCode: "burst3",
+			checked: 1,
+			status: "active",
+			clickCount: 39,
+			lastScannedClickCount: 0,
+			createdAt: hoursAgoIso(2),
+			lastCheckedAt: hoursAgoIso(2),
+		});
+
+		const res = await call(bearerRequest("/api/internal/links/pending"));
+		expect(res.status).toBe(200);
+		const data = await res.json<{ links: unknown[] }>();
+		expect(data.links).toEqual([]);
+	});
+
+	it("does NOT return a link older than 6h even with click_count >= 40", async () => {
+		const { userId } = await seedSession(env.hello_cf_spa_db);
+		await seedHexLink({
+			userId,
+			shortCode: "burst4",
+			checked: 1,
+			status: "active",
+			clickCount: 100,
+			lastScannedClickCount: 0,
+			createdAt: hoursAgoIso(8), // 8 hours ago — outside 6h window
+			lastCheckedAt: hoursAgoIso(8),
+		});
+
+		const res = await call(bearerRequest("/api/internal/links/pending"));
+		expect(res.status).toBe(200);
+		const data = await res.json<{ links: unknown[] }>();
+		expect(data.links).toEqual([]);
+	});
+
+	it("does NOT return a burst-eligible link with manual_override=1", async () => {
+		const { userId } = await seedSession(env.hello_cf_spa_db);
+		await seedHexLink({
+			userId,
+			shortCode: "burst5",
+			checked: 1,
+			status: "active",
+			clickCount: 50,
+			lastScannedClickCount: 0,
+			manualOverride: 1,
+			createdAt: hoursAgoIso(2),
+			lastCheckedAt: hoursAgoIso(2),
+		});
+
+		const res = await call(bearerRequest("/api/internal/links/pending"));
+		expect(res.status).toBe(200);
+		const data = await res.json<{ links: unknown[] }>();
+		expect(data.links).toEqual([]);
+	});
+
+	it("Burst-Revalidation (Prio 2) comes before stale warning (Prio 3) when limit=1", async () => {
+		const { userId } = await seedSession(env.hello_cf_spa_db);
+		// Stale warning link — would be Prio 3
+		const { id: warningId } = await seedHexLink({
+			userId,
+			shortCode: "burst-vs-warn",
+			checked: 1,
+			status: "warning",
+			clickCount: 200,
+			lastScannedClickCount: 200,
+			createdAt: hoursAgoIso(48),
+			lastCheckedAt: hoursAgoIso(48), // overdue by 24h threshold
+		});
+		// Burst-eligible link — should be Prio 2
+		const { id: burstId } = await seedHexLink({
+			userId,
+			shortCode: "burst-prio",
+			checked: 1,
+			status: "active",
+			clickCount: 50,
+			lastScannedClickCount: 0,
+			createdAt: hoursAgoIso(3),
+			lastCheckedAt: hoursAgoIso(3),
+		});
+
+		const res = await call(bearerRequest("/api/internal/links/pending?limit=1&max_age_warning_h=1"));
+		expect(res.status).toBe(200);
+		const data = await res.json<{ links: { id: string }[] }>();
+		// Burst (Prio 2) must come before stale warning (Prio 3)
+		expect(data.links[0].id).toBe(burstId);
+		expect(data.links.map(l => l.id)).not.toContain(warningId);
+	});
+
+	it("checked=0 (Prio 1) comes before Burst-Revalidation (Prio 2) when limit=1", async () => {
+		const { userId } = await seedSession(env.hello_cf_spa_db);
+		// Burst-eligible link — Prio 2
+		const { id: burstId } = await seedHexLink({
+			userId,
+			shortCode: "burst-vs-new",
+			checked: 1,
+			status: "active",
+			clickCount: 50,
+			lastScannedClickCount: 0,
+			createdAt: hoursAgoIso(3),
+			lastCheckedAt: hoursAgoIso(3),
+		});
+		// Never-scanned link — Prio 1
+		const { id: newId } = await seedHexLink({
+			userId,
+			shortCode: "never-scanned",
+			checked: 0,
+			status: "active",
+			clickCount: 1,
+		});
+
+		const res = await call(bearerRequest("/api/internal/links/pending?limit=1"));
+		expect(res.status).toBe(200);
+		const data = await res.json<{ links: { id: string }[] }>();
+		// checked=0 (Prio 1) must come first
+		expect(data.links[0].id).toBe(newId);
+		expect(data.links.map(l => l.id)).not.toContain(burstId);
+	});
+
+	it("sorts burst-eligible links by click_count DESC within Prio 2", async () => {
+		const { userId } = await seedSession(env.hello_cf_spa_db);
+		const { id: highId } = await seedHexLink({
+			userId, shortCode: "burst-hi",
+			checked: 1, status: "active",
+			clickCount: 80, lastScannedClickCount: 0,
+			createdAt: hoursAgoIso(3), lastCheckedAt: hoursAgoIso(3),
+		});
+		const { id: lowId } = await seedHexLink({
+			userId, shortCode: "burst-lo",
+			checked: 1, status: "active",
+			clickCount: 42, lastScannedClickCount: 0,
+			createdAt: hoursAgoIso(4), lastCheckedAt: hoursAgoIso(4),
+		});
+
+		const res = await call(bearerRequest("/api/internal/links/pending?limit=1"));
+		expect(res.status).toBe(200);
+		const data = await res.json<{ links: { id: string }[] }>();
+		expect(data.links[0].id).toBe(highId);
+		expect(data.links.map(l => l.id)).not.toContain(lowId);
+	});
+
+	it("scan-result writeback updates last_scanned_click_count to current click_count", async () => {
+		const { userId } = await seedSession(env.hello_cf_spa_db);
+		const { id } = await seedHexLink({
+			userId,
+			shortCode: "burst-wb",
+			checked: 1,
+			status: "active",
+			clickCount: 50,
+			lastScannedClickCount: 0,
+			createdAt: hoursAgoIso(3),
+			lastCheckedAt: hoursAgoIso(3),
+		});
+
+		const res = await call(bearerRequest(`/api/internal/links/${id}/scan-result`, "POST", VALID_TOKEN, {
+			aggregate_score: 0.1,
+			status: "active",
+			scans: [{ provider: "heuristic", raw_score: 0.1, raw_response: null }],
+		}));
+		expect(res.status).toBe(200);
+
+		const row = await env.hello_cf_spa_db
+			.prepare("SELECT last_scanned_click_count FROM links WHERE id = ?")
+			.bind(id)
+			.first<{ last_scanned_click_count: number }>();
+		// last_scanned_click_count must be updated to the current click_count (50)
+		expect(row?.last_scanned_click_count).toBe(50);
+	});
+
+	it("scan-result for manual_override=1 also updates last_scanned_click_count (audit writeback)", async () => {
+		const { userId } = await seedSession(env.hello_cf_spa_db);
+		const { id } = await seedHexLink({
+			userId,
+			shortCode: "burst-mo-wb",
+			checked: 1,
+			status: "active",
+			clickCount: 60,
+			lastScannedClickCount: 0,
+			manualOverride: 1,
+			createdAt: hoursAgoIso(3),
+			lastCheckedAt: hoursAgoIso(3),
+		});
+
+		const res = await call(bearerRequest(`/api/internal/links/${id}/scan-result`, "POST", VALID_TOKEN, {
+			aggregate_score: 0.99,
+			status: "blocked",
+			scans: [{ provider: "heuristic", raw_score: 0.99, raw_response: null }],
+		}));
+		expect(res.status).toBe(200);
+		const data = await res.json<{ ok: boolean; applied: boolean; reason: string }>();
+		expect(data.applied).toBe(false);
+		expect(data.reason).toBe("manual_override");
+
+		const row = await env.hello_cf_spa_db
+			.prepare("SELECT last_scanned_click_count, status FROM links WHERE id = ?")
+			.bind(id)
+			.first<{ last_scanned_click_count: number; status: string }>();
+		// status must be unchanged
+		expect(row?.status).toBe("active");
+		// last_scanned_click_count must be updated to current click_count (60) to prevent re-burst
+		expect(row?.last_scanned_click_count).toBe(60);
 	});
 });
 

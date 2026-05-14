@@ -80,8 +80,8 @@ async function router(request: Request, env: Env, ctx: ExecutionContext): Promis
 	if (adminDeleteMatch && method === "DELETE") return handleAdminDeleteUser(adminDeleteMatch[1], request, env);
 
 	const adminLinkUpdateMatch = pathname.match(/^\/api\/admin\/links\/([a-zA-Z0-9_-]+)$/);
-	if (adminLinkUpdateMatch && method === "PATCH") return handleAdminUpdateLink(adminLinkUpdateMatch[1], request, env);
-	if (adminLinkUpdateMatch && method === "DELETE") return handleAdminDeleteLink(adminLinkUpdateMatch[1], request, env);
+	if (adminLinkUpdateMatch && method === "PATCH") return handleAdminUpdateLink(adminLinkUpdateMatch[1], request, env, ctx);
+	if (adminLinkUpdateMatch && method === "DELETE") return handleAdminDeleteLink(adminLinkUpdateMatch[1], request, env, ctx);
 
 	return new Response("Not found", { status: 404 });
 }

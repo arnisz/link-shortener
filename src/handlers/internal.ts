@@ -6,6 +6,10 @@
 import type { Env } from "../types";
 import { jsonResponse, errResponse, log } from "../utils";
 import { checkRateLimit } from "../rateLimit";
+import {
+	BURST_REVALIDATION_CLICK_THRESHOLD,
+	BURST_REVALIDATION_WINDOW_HOURS,
+} from "../config";
 
 /**
  * Validates the Bearer token from the Authorization header.
@@ -45,9 +49,11 @@ export async function handleInternalHealth(request: Request, env: Env): Promise<
 /** GET /api/internal/links/pending?limit=N&max_age_warning_h=H&max_age_active_d=D&max_age_blocked_d=D
  * Atomically claims links for scanning using tiered revalidation priorities:
  *   Prio 1: checked = 0 (never scanned)
- *   Prio 2: status = 'warning', last_checked_at older than max_age_warning_h hours (default 24)
- *   Prio 3: status = 'active',  last_checked_at older than max_age_active_d days  (default 14)
- *   Prio 4: status = 'blocked', last_checked_at older than max_age_blocked_d days  (default 90)
+ *   Prio 2: checked = 1 AND created_at within BURST_REVALIDATION_WINDOW_HOURS AND
+ *           click_count >= BURST_REVALIDATION_CLICK_THRESHOLD AND last_scanned_click_count < BURST_REVALIDATION_CLICK_THRESHOLD
+ *   Prio 3: status = 'warning', last_checked_at older than max_age_warning_h hours (default 24)
+ *   Prio 4: status = 'active',  last_checked_at older than max_age_active_d days  (default 14)
+ *   Prio 5: status = 'blocked', last_checked_at older than max_age_blocked_d days  (default 90)
  * Within each priority: click_count DESC, last_checked_at ASC NULLS FIRST.
  * manual_override = 1 links are always excluded.
  */
@@ -79,7 +85,10 @@ export async function handleInternalLinksPending(request: Request, env: Env): Pr
 	if (maxAgeBlockedD === null) return errResponse("max_age_blocked_d must be an integer between 1 and 3650", 400);
 
 	// Atomic claim: UPDATE … WHERE … RETURNING
-	// Four priority tiers merged via CASE for ordering; all within a single atomic UPDATE.
+	// Five priority tiers merged via CASE for ordering; all within a single atomic UPDATE.
+	// Prio 1: never-scanned (checked=0)
+	// Prio 2: burst-revalidation — fresh link with click_count crossing the burst threshold
+	// Prio 3-5: time-based revalidation (warning/active/blocked)
 	let links: { id: string; short_code: string; target_url: string; created_at: string; click_count: number }[] = [];
 	try {
 		const result = await env.hello_cf_spa_db
@@ -92,6 +101,12 @@ export async function handleInternalLinksPending(request: Request, env: Env): Pr
 				     AND (claimed_at IS NULL OR claimed_at < datetime('now', '-10 minutes'))
 				     AND (
 				       checked = 0
+				       OR (
+				         checked = 1
+				         AND datetime(created_at) >= datetime('now', '-' || ? || ' hours')
+				         AND click_count >= ?
+				         AND last_scanned_click_count < ?
+				       )
 				       OR (status = 'warning' AND (last_checked_at IS NULL OR last_checked_at < datetime('now', '-' || ? || ' hours')))
 				       OR (status = 'active'  AND (last_checked_at IS NULL OR last_checked_at < datetime('now', '-' || ? || ' days')))
 				       OR (status = 'blocked' AND (last_checked_at IS NULL OR last_checked_at < datetime('now', '-' || ? || ' days')))
@@ -99,9 +114,13 @@ export async function handleInternalLinksPending(request: Request, env: Env): Pr
 				   ORDER BY
 				     CASE
 				       WHEN checked = 0 THEN 1
-				       WHEN status = 'warning' THEN 2
-				       WHEN status = 'active'  THEN 3
-				       ELSE 4
+				       WHEN checked = 1
+				            AND datetime(created_at) >= datetime('now', '-' || ? || ' hours')
+				            AND click_count >= ?
+				            AND last_scanned_click_count < ? THEN 2
+				       WHEN status = 'warning' THEN 3
+				       WHEN status = 'active'  THEN 4
+				       ELSE 5
 				     END ASC,
 				     click_count DESC,
 				     last_checked_at ASC NULLS FIRST
@@ -109,7 +128,16 @@ export async function handleInternalLinksPending(request: Request, env: Env): Pr
 				 )
 				 RETURNING id, short_code, target_url, created_at, click_count`
 			)
-			.bind(maxAgeWarningH, maxAgeActiveD, maxAgeBlockedD, limit)
+			.bind(
+				// WHERE clause burst params
+				BURST_REVALIDATION_WINDOW_HOURS, BURST_REVALIDATION_CLICK_THRESHOLD, BURST_REVALIDATION_CLICK_THRESHOLD,
+				// WHERE clause time-based params
+				maxAgeWarningH, maxAgeActiveD, maxAgeBlockedD,
+				// ORDER BY burst params (repeated)
+				BURST_REVALIDATION_WINDOW_HOURS, BURST_REVALIDATION_CLICK_THRESHOLD, BURST_REVALIDATION_CLICK_THRESHOLD,
+				// LIMIT
+				limit
+			)
 			.all<{ id: string; short_code: string; target_url: string; created_at: string; click_count: number }>();
 		links = result.results ?? [];
 	} catch (e) {
@@ -169,7 +197,8 @@ export async function handleInternalScanResult(id: string, request: Request, env
 				     spam_score = ?,
 				     status = ?,
 				     last_checked_at = datetime('now'),
-				     claimed_at = NULL
+				     claimed_at = NULL,
+				     last_scanned_click_count = click_count
 				 WHERE id = ? AND manual_override = 0
 				 RETURNING short_code, target_url, is_active, expires_at, user_id`
 			)
@@ -184,7 +213,8 @@ export async function handleInternalScanResult(id: string, request: Request, env
 				.bind(id)
 				.first<{ manual_override: number }>();
 			if (existing?.manual_override === 1) {
-				// Audit-trail: still insert security_scans even for override'd links
+				// Audit-trail: still insert security_scans and update last_scanned_click_count
+				// even for override'd links — prevents re-burst-trigger on next pending poll.
 				try {
 					const now = new Date().toISOString();
 					const insertStmts = body.scans.map(scan =>
@@ -200,6 +230,15 @@ export async function handleInternalScanResult(id: string, request: Request, env
 					}
 				} catch (e) {
 					log("INTERNAL_ERR", `Failed to insert security_scans for manual_override link ${id}: ${String(e)}`);
+				}
+				// Update watermark so the burst-trigger does not re-fire for this link
+				try {
+					await env.hello_cf_spa_db
+						.prepare(`UPDATE links SET last_scanned_click_count = click_count WHERE id = ?`)
+						.bind(id)
+						.run();
+				} catch (e) {
+					log("INTERNAL_ERR", `Failed to update last_scanned_click_count for manual_override link ${id}: ${String(e)}`);
 				}
 				log("INTERNAL", `scan-result: link id=${id} manual_override=1, status not updated`);
 				return jsonResponse({ ok: true, applied: false, reason: "manual_override" });

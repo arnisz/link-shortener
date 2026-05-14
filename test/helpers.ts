@@ -163,7 +163,11 @@ export async function setupLinksTable(db: D1Database): Promise<void> {
 			 await db.prepare(`ALTER TABLE links ADD COLUMN last_checked_at TEXT`).run();
 			 await db.prepare(`ALTER TABLE links ADD COLUMN claimed_at TEXT`).run();
 			 await db.prepare(`ALTER TABLE links ADD COLUMN manual_override INTEGER NOT NULL DEFAULT 0`).run();
-			 await db.prepare(`CREATE INDEX IF NOT EXISTS idx_links_scan_queue ON links(checked, last_checked_at, claimed_at)`).run();
+  	 await db.prepare(`CREATE INDEX IF NOT EXISTS idx_links_scan_queue ON links(checked, last_checked_at, claimed_at)`).run();
+
+			 // Migration: links_phase6_burst_revalidation.sql
+			 await db.prepare(`ALTER TABLE links ADD COLUMN last_scanned_click_count INTEGER NOT NULL DEFAULT 0`).run();
+			 await db.prepare(`CREATE INDEX IF NOT EXISTS idx_links_burst_revalidation ON links(checked, manual_override, created_at, click_count, last_scanned_click_count, claimed_at)`).run();
 }
 
 /**
@@ -220,6 +224,7 @@ export async function seedLink(
 		status?: string;
 		manualOverride?: number;
 		claimedAt?: string | null;
+		lastScannedClickCount?: number;
 	}
 ): Promise<{ id: string; shortCode: string }> {
 	const id = `link-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -228,8 +233,8 @@ export async function seedLink(
 
 	await db
 		.prepare(
-			`INSERT INTO links (id, user_id, short_code, target_url, title, created_at, updated_at, click_count, expires_at, is_active, checked, status, manual_override, claimed_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`
+ 		`INSERT INTO links (id, user_id, short_code, target_url, title, created_at, updated_at, click_count, expires_at, is_active, checked, status, manual_override, claimed_at, last_scanned_click_count)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)`
 		)
 		.bind(
 			id,
@@ -244,7 +249,8 @@ export async function seedLink(
 			opts.checked ?? 0,
 			opts.status ?? "active",
 			opts.manualOverride ?? 0,
-			opts.claimedAt ?? null
+			opts.claimedAt ?? null,
+			opts.lastScannedClickCount ?? 0
 		)
 		.run();
 

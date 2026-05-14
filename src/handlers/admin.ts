@@ -2,6 +2,7 @@ import type { Env } from "../types";
 import { jsonResponse, errResponse, log } from "../utils";
 import { getSessionUser } from "../auth/session";
 import { validateMutationCsrf } from "../csrf";
+import { requireJson } from "../validation";
 
 // ---------------------------------------------------------------------------
 // Auth helper
@@ -49,7 +50,7 @@ export async function handleAdminGetLinks(request: Request, env: Env): Promise<R
 		const [cursorTs, cursorId] = parts;
 		const result = await env.hello_cf_spa_db
 			.prepare(
-				`SELECT l.id, l.short_code, l.target_url, l.status, l.is_active, l.click_count,
+				`SELECT l.id, l.short_code, l.target_url, l.status, l.spam_score, l.is_active, l.click_count,
 				        l.created_at, l.user_id, u.email AS user_email
 				 FROM links l
 				 LEFT JOIN users u ON u.id = l.user_id
@@ -63,7 +64,7 @@ export async function handleAdminGetLinks(request: Request, env: Env): Promise<R
 	} else {
 		const result = await env.hello_cf_spa_db
 			.prepare(
-				`SELECT l.id, l.short_code, l.target_url, l.status, l.is_active, l.click_count,
+				`SELECT l.id, l.short_code, l.target_url, l.status, l.spam_score, l.is_active, l.click_count,
 				        l.created_at, l.user_id, u.email AS user_email
 				 FROM links l
 				 LEFT JOIN users u ON u.id = l.user_id
@@ -198,3 +199,110 @@ export async function handleAdminDeleteUser(
 	log("ADMIN", `User deleted: uid=${id.slice(0, 8)}… by admin=${adminId.slice(0, 8)}…`);
 	return jsonResponse({ ok: true });
 }
+
+// ---------------------------------------------------------------------------
+// PATCH /api/admin/links/:code
+// ---------------------------------------------------------------------------
+
+/**
+ * Updates a link across all users by short_code.
+ * Allowed fields: status and/or spam_score.
+ * Always sets manual_override=1 so the Wächter no longer overwrites status.
+ */
+export async function handleAdminUpdateLink(
+	code: string,
+	request: Request,
+	env: Env,
+	ctx: ExecutionContext
+): Promise<Response> {
+	const adminId = await checkAdminAuth(request, env);
+	if (!adminId) return errResponse("Unauthorized", 401);
+
+	const csrfError = await validateMutationCsrf(request, env);
+	if (csrfError) return csrfError;
+
+	if (!requireJson(request)) {
+		return errResponse("Content-Type must be application/json", 415);
+	}
+
+	let body: { status?: unknown; spam_score?: unknown };
+	try {
+		body = await request.json();
+	} catch {
+		return errResponse("Invalid JSON body", 400);
+	}
+
+	const setClauses: string[] = ["updated_at = ?", "manual_override = 1"];
+	const binds: unknown[] = [new Date().toISOString()];
+
+	if (body.status !== undefined) {
+		if (typeof body.status !== "string" || !["active", "warning", "blocked"].includes(body.status)) {
+			return errResponse("Invalid status", 400);
+		}
+		setClauses.push("status = ?");
+		binds.push(body.status);
+	}
+
+	if (body.spam_score !== undefined) {
+		if (typeof body.spam_score !== "number" || !Number.isFinite(body.spam_score) || body.spam_score < 0 || body.spam_score > 1) {
+			return errResponse("Invalid spam_score", 400);
+		}
+		setClauses.push("spam_score = ?");
+		binds.push(body.spam_score);
+	}
+
+	if (body.status === undefined && body.spam_score === undefined) {
+		return errResponse("No valid fields to update", 400);
+	}
+
+	const result = await env.hello_cf_spa_db
+		.prepare(`UPDATE links SET ${setClauses.join(", ")} WHERE short_code = ?`)
+		.bind(...binds, code)
+		.run();
+
+	if ((result.meta?.changes ?? 0) === 0) {
+		return errResponse("Link not found", 404);
+	}
+
+	if (env.LINKS_KV) {
+		ctx.waitUntil(env.LINKS_KV.delete(`link:${code}`));
+	}
+
+	log("ADMIN", `Link updated: code=${code} by admin=${adminId.slice(0, 8)}…`);
+	return jsonResponse({ ok: true });
+}
+
+// ---------------------------------------------------------------------------
+// DELETE /api/admin/links/:code
+// ---------------------------------------------------------------------------
+
+/** Deletes a link across all users by short_code. */
+export async function handleAdminDeleteLink(
+	code: string,
+	request: Request,
+	env: Env,
+	ctx: ExecutionContext
+): Promise<Response> {
+	const adminId = await checkAdminAuth(request, env);
+	if (!adminId) return errResponse("Unauthorized", 401);
+
+	const csrfError = await validateMutationCsrf(request, env);
+	if (csrfError) return csrfError;
+
+	const result = await env.hello_cf_spa_db
+		.prepare("DELETE FROM links WHERE short_code = ?")
+		.bind(code)
+		.run();
+
+	if ((result.meta?.changes ?? 0) === 0) {
+		return errResponse("Link not found", 404);
+	}
+
+	if (env.LINKS_KV) {
+		ctx.waitUntil(env.LINKS_KV.delete(`link:${code}`));
+	}
+
+	log("ADMIN", `Link deleted: code=${code} by admin=${adminId.slice(0, 8)}…`);
+	return jsonResponse({ ok: true });
+}
+

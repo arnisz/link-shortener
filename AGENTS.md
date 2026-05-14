@@ -70,6 +70,7 @@ npx wrangler d1 execute hello-cf-spa-db --local --file=sql/security_scans.sql
 npx wrangler d1 execute hello-cf-spa-db --local --file=sql/bypass_clicks.sql
 npx wrangler d1 execute hello-cf-spa-db --local --file=sql/links_phase6_revalidation_index.sql
 npx wrangler d1 execute hello-cf-spa-db --local --file=sql/admin.sql
+npx wrangler d1 execute hello-cf-spa-db --local --file=sql/links_phase6_burst_revalidation.sql
 ```
 
 For remote (production): replace `--local` with `--remote`.
@@ -492,7 +493,7 @@ Der WÃ¤chter wird als **separates Projekt** entwickelt und betrieben. Kein WÃ
 | **4** | Google Safe Browsing als zweiter Provider | WÃ¤chter-Projekt | â³ ausstehend |
 | **5** | Interstitial-Page (`/warning`, `/warning/proceed`) | dieses Repo | âœ… done |
 | **5b** | `bypass_clicks`-Tabelle + Logging | dieses Repo | âœ… done |
-| **6** | Tiered Revalidation (pending-Query), manual_override Audit-Response, revalidation_aging Metrics, Burst-Revalidation fÃ¼r neue Links (`>= 40` Klicks in `<= 6h`) | dieses Repo | ðŸ”œ next |
+| **6** | Tiered Revalidation (pending-Query), manual_override Audit-Response, revalidation_aging Metrics, Burst-Revalidation fÃ¼r neue Links (`>= 40` Klicks in `<= 6h`) | dieses Repo | ✅ done |
 | **7** | Push-Trigger (optional, nur bei messbarem TTFS-Problem) | beide | â¸ï¸ defer |
 
 ### Bewusst nicht im MVP

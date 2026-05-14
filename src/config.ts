@@ -22,3 +22,7 @@ export const GLOBAL_INSERT_CAP = 1000;
 export const QUEUE_DEPTH_THROTTLE_LIMIT = 5000;
 /** Backpressure: TTL des Modul-Scope-Queue-Depth-Caches in ms (Schicht 3). */
 export const QUEUE_DEPTH_CACHE_TTL_MS = 30_000;
+/** Burst-Revalidation: Klick-Schwelle, ab der ein frischer Link zur vorgezogenen Neubewertung fällig wird. */
+export const BURST_REVALIDATION_CLICK_THRESHOLD = 40;
+/** Burst-Revalidation: Frischefenster in Stunden; nur Links innerhalb dieses Zeitraums ab created_at sind burst-eligible. */
+export const BURST_REVALIDATION_WINDOW_HOURS = 6;

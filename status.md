@@ -1,8 +1,26 @@
 # Status Log
 
+## 2026-05-14 — Implementierung: Burst-Revalidation fuer neue Links (40 Klicks in 6h)
+
+**Status:** implementiert ✅ — 2026-05-14
+
+### Umgesetzte Aenderungen
+
+- `sql/links_phase6_burst_revalidation.sql` — neue Spalte `last_scanned_click_count INTEGER NOT NULL DEFAULT 0` in `links`; neuer Index `idx_links_burst_revalidation`
+- `src/config.ts` — neue Konstanten `BURST_REVALIDATION_CLICK_THRESHOLD = 40` und `BURST_REVALIDATION_WINDOW_HOURS = 6`
+- `src/handlers/internal.ts` — `handleInternalLinksPending`: neue Prioritaetsklasse 2 (Burst) direkt nach `checked = 0`; `handleInternalScanResult`: Writeback `last_scanned_click_count = click_count` nach jedem Scan (auch fuer `manual_override = 1`, um Re-Burst zu verhindern)
+- `test/internal.spec.ts` + `test/helpers.ts` — 10 neue Tests; `seedHexLink` um `lastScannedClickCount` und `createdAt` erweitert; `setupLinksTable` um Migration erweitert
+- `AGENTS.md` — Phase-6-Status auf `✅ done` gesetzt; Migration in lokaler DB-Setup-Liste ergaenzt
+
+### Technische Anmerkung
+
+SQLite vergleicht `created_at` (ISO-8601 mit `T` und `Z`) nicht korrekt mit `datetime('now', ...)` per String-Vergleich. Die Query verwendet deshalb `datetime(created_at) >= datetime('now', '-N hours')`, damit SQLite den ISO-8601-Timestamp korrekt parst.
+
+---
+
 ## 2026-05-14 — Planung: Burst-Revalidation fuer neue Links (40 Klicks in 6h)
 
-**Status:** geplant 🔜 — fuer das naechste Feature-Update vorgesehen, noch nicht implementiert
+**Status:** implementiert ✅ (siehe Eintrag oben)
 
 ### Anlass
 
