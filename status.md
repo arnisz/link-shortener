@@ -16,7 +16,8 @@
 ### Verifikation
 
 - Gezielte Admin-Tests und Gesamtsuite wurden im Implementierungstask ausgefuehrt; Details siehe Task-Zusammenfassung.
-- Manueller Wrangler/Admin-UI-Smoke-Test bleibt fuer eine interaktive Umgebung nachgelagert.
+- Manueller Wrangler-/Admin-UI-Smoke-Test am 2026-05-14 erfolgreich durchgefuehrt: Status-Toggle im Admin-UI geprueft; `GET /r/<code>` reagierte ohne beobachtbares Drift-Fenster mit dem erwarteten Ergebnis.
+- Deploy-/Production-Smoke-Test am 2026-05-14 erfolgreich durchgefuehrt: Worker deployt; Test-Link-Statuswechsel und Admin-Aktion auf Wegwerf-User in Production ohne Auffaelligkeiten verifiziert.
 
 ---
 
