@@ -26,3 +26,11 @@ export const QUEUE_DEPTH_CACHE_TTL_MS = 30_000;
 export const BURST_REVALIDATION_CLICK_THRESHOLD = 40;
 /** Burst-Revalidation: Frischefenster in Stunden; nur Links innerhalb dieses Zeitraums ab created_at sind burst-eligible. */
 export const BURST_REVALIDATION_WINDOW_HOURS = 6;
+/** Active-Revalidation: unterhalb dieses Klickdeltas seit dem letzten Scan bleibt nur die reguläre 14-Tage-Regel aktiv. */
+export const ACTIVE_REVALIDATION_MEDIUM_DELTA_THRESHOLD = 50;
+/** Active-Revalidation: ab diesem Klickdelta seit dem letzten Scan gilt die schnellste Nachprüfung. */
+export const ACTIVE_REVALIDATION_HIGH_DELTA_THRESHOLD = 100;
+/** Active-Revalidation: 50-99 neue Klicks seit dem letzten Scan → Reclaim nach 1 Stunde. */
+export const ACTIVE_REVALIDATION_MEDIUM_RECHECK_HOURS = 1;
+/** Active-Revalidation: ab 100 neuen Klicks seit dem letzten Scan → Reclaim nach 30 Minuten. */
+export const ACTIVE_REVALIDATION_HIGH_RECHECK_MINUTES = 30;

@@ -13,6 +13,7 @@
 import { env, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import worker from "../src/index";
+import type { Env } from "../src/types";
 import {
 	makeRequest,
 	setupTestDb,
@@ -22,7 +23,6 @@ import {
 	setupSecurityScansTable,
 	createLinksKvMock,
 	seedSession,
-	seedLink,
 } from "./helpers";
 
 const BASE = "https://example.com";
@@ -32,6 +32,7 @@ const WRONG_TOKEN = "wrong-token";
 // ── One-time schema setup ─────────────────────────────────────────────────────
 
 let linksKvMock: ReturnType<typeof createLinksKvMock>;
+let linksKv: ReturnType<typeof createLinksKvMock>;
 
 beforeAll(async () => {
 	await setupTestDb(env.hello_cf_spa_db);
@@ -40,7 +41,8 @@ beforeAll(async () => {
 	await setupTagsTables(env.hello_cf_spa_db);
 	await setupSecurityScansTable(env.hello_cf_spa_db);
 	linksKvMock = createLinksKvMock();
-	env.LINKS_KV = linksKvMock;
+	linksKv = linksKvMock;
+	env.LINKS_KV = linksKvMock as unknown as Env["LINKS_KV"];
 });
 
 // ── Clean mutable tables before each test ────────────────────────────────────
@@ -53,14 +55,14 @@ beforeEach(async () => {
 	await env.hello_cf_spa_db.prepare("DELETE FROM sessions").run();
 	await env.hello_cf_spa_db.prepare("DELETE FROM users").run();
 	await env.hello_cf_spa_db.prepare("DELETE FROM rate_limits").run();
-	linksKvMock.reset();
+	linksKv.reset();
 });
 
 // ── Helper ────────────────────────────────────────────────────────────────────
 
 async function call(req: Request): Promise<Response> {
 	const ctx = createExecutionContext();
-	const res = await worker.fetch(req, env, ctx);
+	const res = await worker.fetch(req, env as unknown as Env, ctx);
 	await waitOnExecutionContext(ctx);
 	return res;
 }
@@ -342,6 +344,105 @@ describe("GET /api/internal/links/pending", () => {
 		// Higher click_count must come first
 		expect(data.links[0].id).toBe(highId);
 		expect(data.links.map(l => l.id)).not.toContain(lowId);
+	});
+
+	it("keeps active links with delta < 50 on the existing 14-day reclaim interval", async () => {
+		const { userId } = await seedSession(env.hello_cf_spa_db);
+		const thirteenDaysAgo = new Date(Date.now() - 13 * 24 * 60 * 60 * 1000).toISOString().replace("T", " ").replace("Z", "");
+		const fifteenDaysAgo = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString().replace("T", " ").replace("Z", "");
+
+		const { id: freshId } = await seedHexLink({
+			userId,
+			shortCode: "active-fresh-delta-low",
+			checked: 1,
+			status: "active",
+			clickCount: 49,
+			lastScannedClickCount: 0,
+			lastCheckedAt: thirteenDaysAgo,
+			createdAt: new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString(),
+		});
+		const { id: dueId } = await seedHexLink({
+			userId,
+			shortCode: "active-overdue-delta-low",
+			checked: 1,
+			status: "active",
+			clickCount: 49,
+			lastScannedClickCount: 0,
+			lastCheckedAt: fifteenDaysAgo,
+			createdAt: new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString(),
+		});
+
+		const res = await call(bearerRequest("/api/internal/links/pending"));
+		expect(res.status).toBe(200);
+		const data = await res.json<{ links: { id: string }[] }>();
+		expect(data.links.map(l => l.id)).toContain(dueId);
+		expect(data.links.map(l => l.id)).not.toContain(freshId);
+	});
+
+	it("reclaims active links with delta 50-99 after 1 hour since last_checked_at", async () => {
+		const { userId } = await seedSession(env.hello_cf_spa_db);
+		const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString().replace("T", " ").replace("Z", "");
+		const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString().replace("T", " ").replace("Z", "");
+
+		const { id: freshId } = await seedHexLink({
+			userId,
+			shortCode: "active-mid-fresh",
+			checked: 1,
+			status: "active",
+			clickCount: 75,
+			lastScannedClickCount: 0,
+			lastCheckedAt: thirtyMinutesAgo,
+			createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+		});
+		const { id: dueId } = await seedHexLink({
+			userId,
+			shortCode: "active-mid-due",
+			checked: 1,
+			status: "active",
+			clickCount: 75,
+			lastScannedClickCount: 0,
+			lastCheckedAt: twoHoursAgo,
+			createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+		});
+
+		const res = await call(bearerRequest("/api/internal/links/pending"));
+		expect(res.status).toBe(200);
+		const data = await res.json<{ links: { id: string }[] }>();
+		expect(data.links.map(l => l.id)).toContain(dueId);
+		expect(data.links.map(l => l.id)).not.toContain(freshId);
+	});
+
+	it("reclaims active links with delta >= 100 after 30 minutes since last_checked_at", async () => {
+		const { userId } = await seedSession(env.hello_cf_spa_db);
+		const twentyMinutesAgo = new Date(Date.now() - 20 * 60 * 1000).toISOString().replace("T", " ").replace("Z", "");
+		const fortyMinutesAgo = new Date(Date.now() - 40 * 60 * 1000).toISOString().replace("T", " ").replace("Z", "");
+
+		const { id: freshId } = await seedHexLink({
+			userId,
+			shortCode: "active-high-fresh",
+			checked: 1,
+			status: "active",
+			clickCount: 150,
+			lastScannedClickCount: 0,
+			lastCheckedAt: twentyMinutesAgo,
+			createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+		});
+		const { id: dueId } = await seedHexLink({
+			userId,
+			shortCode: "active-high-due",
+			checked: 1,
+			status: "active",
+			clickCount: 150,
+			lastScannedClickCount: 0,
+			lastCheckedAt: fortyMinutesAgo,
+			createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+		});
+
+		const res = await call(bearerRequest("/api/internal/links/pending"));
+		expect(res.status).toBe(200);
+		const data = await res.json<{ links: { id: string }[] }>();
+		expect(data.links.map(l => l.id)).toContain(dueId);
+		expect(data.links.map(l => l.id)).not.toContain(freshId);
 	});
 });
 
@@ -685,7 +786,7 @@ describe("POST /api/internal/links/:id/scan-result", () => {
 		const { userId } = await seedSession(env.hello_cf_spa_db);
 		const { id } = await seedHexLink({ userId, shortCode: "scan3", checked: 0 });
 		// Pre-populate KV cache with old active status
-		await env.LINKS_KV.put("link:scan3", JSON.stringify({ id, user_id: userId, target_url: "https://example.com", is_active: 1, status: "active" }));
+		await linksKv.put("link:scan3", JSON.stringify({ id, user_id: userId, target_url: "https://example.com", is_active: 1, status: "active" }));
 
 		await call(bearerRequest(`/api/internal/links/${id}/scan-result`, "POST", VALID_TOKEN, {
 			aggregate_score: 0.97,
@@ -694,7 +795,7 @@ describe("POST /api/internal/links/:id/scan-result", () => {
 		}));
 
 		// KV should now contain the updated status (put, not delete — avoids eventual-consistency drift)
-		const raw = await env.LINKS_KV.get("link:scan3");
+		const raw = await linksKv.get("link:scan3");
 		expect(raw).not.toBeNull();
 		const cached = JSON.parse(raw!);
 		expect(cached.status).toBe("blocked");
@@ -792,7 +893,7 @@ describe("POST /api/internal/links/:id/scan-result", () => {
 		});
 
 		// Simulate stale KV cache with old blocked status
-		await env.LINKS_KV.put("link:reeval1", JSON.stringify({
+		await linksKv.put("link:reeval1", JSON.stringify({
 			id,
 			user_id: userId,
 			target_url: "https://example.com/target",
@@ -809,7 +910,7 @@ describe("POST /api/internal/links/:id/scan-result", () => {
 		expect(scanRes.status).toBe(200);
 
 		// KV must now contain the updated warning status (not the old blocked)
-		const raw = await env.LINKS_KV.get("link:reeval1");
+		const raw = await linksKv.get("link:reeval1");
 		expect(raw).not.toBeNull();
 		const cached = JSON.parse(raw!);
 		expect(cached.status).toBe("warning");

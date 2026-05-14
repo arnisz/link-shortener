@@ -7,6 +7,10 @@ import type { Env } from "../types";
 import { jsonResponse, errResponse, log } from "../utils";
 import { checkRateLimit } from "../rateLimit";
 import {
+	ACTIVE_REVALIDATION_HIGH_DELTA_THRESHOLD,
+	ACTIVE_REVALIDATION_HIGH_RECHECK_MINUTES,
+	ACTIVE_REVALIDATION_MEDIUM_DELTA_THRESHOLD,
+	ACTIVE_REVALIDATION_MEDIUM_RECHECK_HOURS,
 	BURST_REVALIDATION_CLICK_THRESHOLD,
 	BURST_REVALIDATION_WINDOW_HOURS,
 } from "../config";
@@ -52,8 +56,10 @@ export async function handleInternalHealth(request: Request, env: Env): Promise<
  *   Prio 2: checked = 1 AND created_at within BURST_REVALIDATION_WINDOW_HOURS AND
  *           click_count >= BURST_REVALIDATION_CLICK_THRESHOLD AND last_scanned_click_count < BURST_REVALIDATION_CLICK_THRESHOLD
  *   Prio 3: status = 'warning', last_checked_at older than max_age_warning_h hours (default 24)
- *   Prio 4: status = 'active',  last_checked_at older than max_age_active_d days  (default 14)
- *   Prio 5: status = 'blocked', last_checked_at older than max_age_blocked_d days  (default 90)
+ *   Prio 4: status = 'active', delta >= ACTIVE_REVALIDATION_HIGH_DELTA_THRESHOLD and last_checked_at older than ACTIVE_REVALIDATION_HIGH_RECHECK_MINUTES
+ *   Prio 5: status = 'active', delta >= ACTIVE_REVALIDATION_MEDIUM_DELTA_THRESHOLD and < ACTIVE_REVALIDATION_HIGH_DELTA_THRESHOLD and last_checked_at older than ACTIVE_REVALIDATION_MEDIUM_RECHECK_HOURS
+ *   Prio 6: status = 'active', delta < ACTIVE_REVALIDATION_MEDIUM_DELTA_THRESHOLD and last_checked_at older than max_age_active_d days (default 14)
+ *   Prio 7: status = 'blocked', last_checked_at older than max_age_blocked_d days  (default 90)
  * Within each priority: click_count DESC, last_checked_at ASC NULLS FIRST.
  * manual_override = 1 links are always excluded.
  */
@@ -85,10 +91,12 @@ export async function handleInternalLinksPending(request: Request, env: Env): Pr
 	if (maxAgeBlockedD === null) return errResponse("max_age_blocked_d must be an integer between 1 and 3650", 400);
 
 	// Atomic claim: UPDATE … WHERE … RETURNING
-	// Five priority tiers merged via CASE for ordering; all within a single atomic UPDATE.
+	// Seven priority tiers merged via CASE for ordering; all within a single atomic UPDATE.
 	// Prio 1: never-scanned (checked=0)
 	// Prio 2: burst-revalidation — fresh link with click_count crossing the burst threshold
-	// Prio 3-5: time-based revalidation (warning/active/blocked)
+	// Prio 3: warning links overdue for quick revalidation
+	// Prio 4-6: active links — adaptive by click delta since the last scan
+	// Prio 7: blocked links overdue for long-interval revalidation
 	let links: { id: string; short_code: string; target_url: string; created_at: string; click_count: number }[] = [];
 	try {
 		const result = await env.hello_cf_spa_db
@@ -108,7 +116,27 @@ export async function handleInternalLinksPending(request: Request, env: Env): Pr
 				         AND last_scanned_click_count < ?
 				       )
 				       OR (status = 'warning' AND (last_checked_at IS NULL OR last_checked_at < datetime('now', '-' || ? || ' hours')))
-				       OR (status = 'active'  AND (last_checked_at IS NULL OR last_checked_at < datetime('now', '-' || ? || ' days')))
+				       OR (
+				         status = 'active'
+				         AND checked = 1
+				         AND click_count - last_scanned_click_count >= ?
+				         AND (last_checked_at IS NULL OR last_checked_at < datetime('now', '-' || ? || ' minutes'))
+				       )
+				       OR (
+				         status = 'active'
+				         AND checked = 1
+				         AND click_count - last_scanned_click_count >= ?
+				         AND click_count - last_scanned_click_count < ?
+				         AND (last_checked_at IS NULL OR last_checked_at < datetime('now', '-' || ? || ' hours'))
+				       )
+				       OR (
+				         status = 'active'
+				         AND (
+				           checked = 0
+				           OR click_count - last_scanned_click_count < ?
+				         )
+				         AND (last_checked_at IS NULL OR last_checked_at < datetime('now', '-' || ? || ' days'))
+				       )
 				       OR (status = 'blocked' AND (last_checked_at IS NULL OR last_checked_at < datetime('now', '-' || ? || ' days')))
 				     )
 				   ORDER BY
@@ -119,8 +147,19 @@ export async function handleInternalLinksPending(request: Request, env: Env): Pr
 				            AND click_count >= ?
 				            AND last_scanned_click_count < ? THEN 2
 				       WHEN status = 'warning' THEN 3
-				       WHEN status = 'active'  THEN 4
-				       ELSE 5
+				       WHEN status = 'active'
+				            AND checked = 1
+				            AND click_count - last_scanned_click_count >= ?
+				            AND (last_checked_at IS NULL OR last_checked_at < datetime('now', '-' || ? || ' minutes')) THEN 4
+				       WHEN status = 'active'
+				            AND checked = 1
+				            AND click_count - last_scanned_click_count >= ?
+				            AND click_count - last_scanned_click_count < ?
+				            AND (last_checked_at IS NULL OR last_checked_at < datetime('now', '-' || ? || ' hours')) THEN 5
+				       WHEN status = 'active'
+				            AND (checked = 0 OR click_count - last_scanned_click_count < ?)
+				            AND (last_checked_at IS NULL OR last_checked_at < datetime('now', '-' || ? || ' days')) THEN 6
+				       ELSE 7
 				     END ASC,
 				     click_count DESC,
 				     last_checked_at ASC NULLS FIRST
@@ -131,10 +170,18 @@ export async function handleInternalLinksPending(request: Request, env: Env): Pr
 			.bind(
 				// WHERE clause burst params
 				BURST_REVALIDATION_WINDOW_HOURS, BURST_REVALIDATION_CLICK_THRESHOLD, BURST_REVALIDATION_CLICK_THRESHOLD,
-				// WHERE clause time-based params
-				maxAgeWarningH, maxAgeActiveD, maxAgeBlockedD,
+				// WHERE clause warning + adaptive active params + blocked params
+				maxAgeWarningH,
+				ACTIVE_REVALIDATION_HIGH_DELTA_THRESHOLD, ACTIVE_REVALIDATION_HIGH_RECHECK_MINUTES,
+				ACTIVE_REVALIDATION_MEDIUM_DELTA_THRESHOLD, ACTIVE_REVALIDATION_HIGH_DELTA_THRESHOLD, ACTIVE_REVALIDATION_MEDIUM_RECHECK_HOURS,
+				ACTIVE_REVALIDATION_MEDIUM_DELTA_THRESHOLD, maxAgeActiveD,
+				maxAgeBlockedD,
 				// ORDER BY burst params (repeated)
 				BURST_REVALIDATION_WINDOW_HOURS, BURST_REVALIDATION_CLICK_THRESHOLD, BURST_REVALIDATION_CLICK_THRESHOLD,
+				// ORDER BY adaptive active params (repeated)
+				ACTIVE_REVALIDATION_HIGH_DELTA_THRESHOLD, ACTIVE_REVALIDATION_HIGH_RECHECK_MINUTES,
+				ACTIVE_REVALIDATION_MEDIUM_DELTA_THRESHOLD, ACTIVE_REVALIDATION_HIGH_DELTA_THRESHOLD, ACTIVE_REVALIDATION_MEDIUM_RECHECK_HOURS,
+				ACTIVE_REVALIDATION_MEDIUM_DELTA_THRESHOLD, maxAgeActiveD,
 				// LIMIT
 				limit
 			)

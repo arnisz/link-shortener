@@ -131,7 +131,7 @@ For remote (production): replace `--local` with `--remote`.
 - **Redirect anti-enumeration**: `handleRedirect` returns `404` for not-found, inactive (`is_active = 0`), **and** expired links â€” never `410`. This prevents short-code enumeration via status-code differences.
 - **CSRF token acquisition**: call `GET /api/me` while authenticated; the `csrfToken` field in the JSON response is the value to send as `X-CSRF-Token` on subsequent mutation requests. The token is `HMAC-SHA256(sessionId, SESSION_SECRET)` where `sessionId` is the `__Host-sid` cookie value.
 - **OAuth cookies**: `handleLogin` sets short-lived `__Host-oauth_state` and `__Host-oauth_nonce` cookies (`Max-Age=600`). After a successful callback, both are cleared and the user is redirected to `/app.html`. `getAllowedOrigins` (in `src/csrf.ts`) dynamically computes allowed origins from both `APP_BASE_URL` and the request's own origin, so CSRF validation works in every environment without extra config.
-- **Config limits**: `TARGET_URL_MAX_LEN = 2000`, `TITLE_MAX_LEN = 200`, `TAG_MAX_PER_LINK = 10`, `TAG_NAME_MAX_LEN = 50`, `SHORT_CODE_GENERATION_RETRIES = 5`, `GLOBAL_INSERT_CAP = 1000`, `QUEUE_DEPTH_THROTTLE_LIMIT = 5000`, `QUEUE_DEPTH_CACHE_TTL_MS = 30_000` â€” all in `src/config.ts`; never hardcode these.
+- **Config limits**: `TARGET_URL_MAX_LEN = 2000`, `TITLE_MAX_LEN = 200`, `TAG_MAX_PER_LINK = 10`, `TAG_NAME_MAX_LEN = 50`, `SHORT_CODE_GENERATION_RETRIES = 5`, `GLOBAL_INSERT_CAP = 1000`, `QUEUE_DEPTH_THROTTLE_LIMIT = 5000`, `QUEUE_DEPTH_CACHE_TTL_MS = 30_000`, `BURST_REVALIDATION_CLICK_THRESHOLD = 40`, `BURST_REVALIDATION_WINDOW_HOURS = 6`, `ACTIVE_REVALIDATION_MEDIUM_DELTA_THRESHOLD = 50`, `ACTIVE_REVALIDATION_HIGH_DELTA_THRESHOLD = 100`, `ACTIVE_REVALIDATION_MEDIUM_RECHECK_HOURS = 1`, `ACTIVE_REVALIDATION_HIGH_RECHECK_MINUTES = 30` â€” all in `src/config.ts`; never hardcode these.
 
 ## Data Format Contracts
 
@@ -370,7 +370,7 @@ Cache-Invalidierung nach User-Aktion: Toggle `is_active` und Inline-Edit `short_
 
 ### `/api/internal/links/pending` â€” Tiered Revalidation (Phase 6, implementiert)
 
-Die aktuelle Implementierung fragt nur `checked = 0` ab. Phase 6 erweitert auf vier PrioritÃ¤tsklassen:
+Die aktuelle Implementierung claimt fÃ¤llige Links Ã¼ber sieben PrioritÃ¤tsklassen: Initial-Scan, frische Burst-Revalidation, zeitbasierte Warning-Revalidation, adaptive Active-Revalidation in zwei Klickdelta-Stufen, regulÃ¤re 14-Tage-Active-Revalidation und schlieÃŸlich Blocked-Revalidation.
 
 ```
 GET /api/internal/links/pending
@@ -386,7 +386,7 @@ GET /api/internal/links/pending
 |-----------|---------|---------|
 | `limit` | 50 | max. 100 |
 | `max_age_warning_h` | `24` | warning-Links Ã¤lter als N Stunden sind fÃ¤llig |
-| `max_age_active_d` | `14` | active-Links Ã¤lter als N Tage sind fÃ¤llig |
+| `max_age_active_d` | `14` | active-Links mit `< 50` neuen Klicks seit dem letzten Scan sind Ã¤lter als N Tage fÃ¤llig |
 | `max_age_blocked_d` | `90` | blocked-Links Ã¤lter als N Tage sind fÃ¤llig |
 
 Alle Werte mÃ¼ssen positive Integer sein: `1 â‰¤ h â‰¤ 8760`, `1 â‰¤ d â‰¤ 3650`. Sonst 400.
@@ -397,15 +397,20 @@ Alle Werte mÃ¼ssen positive Integer sein: `1 â‰¤ h â‰¤ 8760`, `1 â‰
 |------|--------|-------------------|------------|
 | 0 | `manual_override = 1` | **nie** â€” via WHERE ausgeschlossen | Admin-Entscheidung verbindlich |
 | 1 | `checked = 0` | sofort | Neue Links mÃ¼ssen erstmals bewertet werden |
-| 2 | `status = 'warning'` | 24h | False-Positive-Risiko hoch, schnelle Rehabilitierung |
-| 3 | `status = 'active'` | 14d | Schutz vor nachtrÃ¤glich kompromittierten Hosts |
-| 4 | `status = 'blocked'` | 90d | True Positives selten transient |
+| 2 | `checked = 1` + `created_at <= 6h` + `click_count >= 40` + `last_scanned_click_count < 40` | sofort | Frische Burst-Revalidation direkt nach Reichweitenanstieg |
+| 3 | `status = 'warning'` | 24h | False-Positive-Risiko hoch, schnelle Rehabilitierung |
+| 4 | `status = 'active'` + `click_count - last_scanned_click_count >= 100` | 30min seit `last_checked_at` | Sehr hohe neue Reichweite seit der letzten Bewertung |
+| 5 | `status = 'active'` + `50 <= click_count - last_scanned_click_count < 100` | 1h seit `last_checked_at` | Mittlere neue Reichweite seit der letzten Bewertung |
+| 6 | `status = 'active'` + `click_count - last_scanned_click_count < 50` | 14d | Ruhige Active-Links bleiben auf dem Langfrist-Intervall |
+| 7 | `status = 'blocked'` | 90d | True Positives selten transient |
 
 **ORDER BY innerhalb gleicher Prio:** `click_count DESC` (Reichweite = Risiko-Multiplikator), dann `last_checked_at ASC NULLS FIRST` (Ã¤lteste Bewertung zuerst).
 
 **Response enthÃ¤lt zusÃ¤tzlich:** `click_count`, `created_at` (damit der WÃ¤chter eigene Priorisierungslogik implementieren kann ohne Folge-Query).
 
 **Jitter-Verantwortung liegt beim WÃ¤chter** (Â±15% auf `max_age_*`-Parameter), nicht beim Worker. Worker liefert nur "fÃ¤llig nach Schwellwert".
+
+**Adaptive Active-Revalidation:** FÃ¼r `status = 'active'` wird das Klickdelta seit dem letzten Scan Ã¼ber `click_count - last_scanned_click_count` ausgewertet. Unter 50 neuen Klicks bleibt die bestehende 14-Tage-Regel aktiv. Ab 50 neuen Klicks wird die Wiedervorlage beschleunigt und an `last_checked_at` gekoppelt: 50â€“99 neue Klicks â†’ reclaim nach 1 Stunde, ab 100 neuen Klicks â†’ reclaim nach 30 Minuten. `updated_at` wird bewusst **nicht** als Revalidation-Signal verwendet, weil es auch durch Nicht-Klick-Mutationen verÃ¤ndert wird.
 
 ### Burst-Revalidation fÃ¼r neue Links (implementiert)
 

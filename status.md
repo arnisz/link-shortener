@@ -1,5 +1,29 @@
 # Status Log
 
+## 2026-05-14 — Implementierung: Adaptive Active-Revalidation nach Klickdelta seit letztem Scan
+
+**Status:** implementiert ✅ — 2026-05-14
+
+### Umgesetzte Aenderungen
+
+- `test/internal.spec.ts` — zuerst neue Pending-Tests fuer adaptive Active-Revalidation ergänzt: `< 50` neue Klicks bleibt 14 Tage, `50-99` neue Klicks reclaim nach 1 Stunde seit `last_checked_at`, `>= 100` neue Klicks reclaim nach 30 Minuten seit `last_checked_at`.
+- `src/config.ts` — neue Konstanten fuer klickdelta-basierte Active-Revalidation ergänzt (`ACTIVE_REVALIDATION_MEDIUM_DELTA_THRESHOLD`, `ACTIVE_REVALIDATION_HIGH_DELTA_THRESHOLD`, `ACTIVE_REVALIDATION_MEDIUM_RECHECK_HOURS`, `ACTIVE_REVALIDATION_HIGH_RECHECK_MINUTES`).
+- `src/handlers/internal.ts` — `handleInternalLinksPending` um adaptive Active-Revalidation erweitert; `last_checked_at` ist jetzt das zeitliche Signal fuer beschleunigte Active-Reclaims, `updated_at` wird bewusst nicht verwendet.
+- `AGENTS.md` — Pending-/Revalidation-Sektion und Config-Limits um die neue adaptive Active-Revalidation ergänzt.
+
+### Fachliche Regel
+
+- `click_count - last_scanned_click_count < 50` → unverändert reguläre Active-Revalidation nach 14 Tagen.
+- `50 <= click_count - last_scanned_click_count < 100` → Active-Reclaim nach 1 Stunde seit `last_checked_at`.
+- `click_count - last_scanned_click_count >= 100` → Active-Reclaim nach 30 Minuten seit `last_checked_at`.
+
+### Verifikation
+
+- Gezielte Tests: `npm test -- internal.spec.ts --run`
+- Gesamtsuite nach Implementierung: `npm test -- --run`
+
+---
+
 ## 2026-05-14 — Implementierung: Security-Audit-Fixes S-3/S-1/S-2
 
 **Status:** implementiert ✅ — 2026-05-14
