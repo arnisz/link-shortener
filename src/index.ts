@@ -6,10 +6,24 @@ import { handleWarning, handleWarningProceed } from "./handlers/warning";
 import { handleAdminGetLinks, handleAdminGetUsers, handleAdminBlockUser, handleAdminUnblockUser, handleAdminDeleteUser, handleAdminUpdateLink, handleAdminDeleteLink } from "./handlers/admin";
 import { applySecurityHeaders, errResponse, log } from "./utils";
 import { validateCsrf } from "./csrf";
+import { SECURITY_POLICY_TXT, SECURITY_TXT } from './config';
 
 async function router(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 	const url = new URL(request.url);
 	const { pathname, method } = { pathname: url.pathname, method: request.method };
+
+	// ── Public static well-known files (vor CSRF, kein Auth nötig) ───────────
+	if (pathname === '/.well-known/security.txt') {
+		return new Response(SECURITY_TXT, {
+			headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+		});
+	}
+
+	if (pathname === '/.well-known/security-policy.txt') {
+		return new Response(SECURITY_POLICY_TXT, {
+			headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+		});
+	}
 
 	// ── CSRF protection: reject cross-origin POST requests ────────────────────
 	if (!validateCsrf(request, env)) {

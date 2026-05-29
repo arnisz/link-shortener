@@ -34,3 +34,22 @@ export const ACTIVE_REVALIDATION_HIGH_DELTA_THRESHOLD = 100;
 export const ACTIVE_REVALIDATION_MEDIUM_RECHECK_HOURS = 1;
 /** Active-Revalidation: ab 100 neuen Klicks seit dem letzten Scan → Reclaim nach 30 Minuten. */
 export const ACTIVE_REVALIDATION_HIGH_RECHECK_MINUTES = 30;
+
+export const SECURITY_TXT = `Contact: mailto:security@xx.xx
+Expires: 2027-06-01T00:00:00+00:00
+Preferred-Languages: en
+Policy: https://xxx.xx/.well-known/security-policy.txt
+`;
+
+export const SECURITY_POLICY_TXT = `# Security Policy — aadd.li
+
+Scope: All services reachable under aadd.li and api.aadd.li.
+
+Disclosure process:
+1. Report via xxx (plaintext or PGP).
+2. We confirm receipt within 5 business days.
+3. We aim to resolve critical issues within 30 days.
+4. Coordinated disclosure — please do not publish before a fix is available.
+
+Out of scope: Social engineering, physical attacks, third-party services.
+`;
