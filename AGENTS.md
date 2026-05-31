@@ -33,11 +33,12 @@ Required **secrets** (set via `wrangler secret put`):
 - `GOOGLE_CLIENT_SECRET`
 - `SESSION_SECRET`
 - `WAECHTER_TOKEN` â€” Bearer token for `/api/internal/*` endpoints
+- `MAIL_NOTIFY_TOKEN` â€” Bearer token for the abuse mail-notify endpoint
 
 KV namespaces (**implemented**, configured in `wrangler.jsonc`):
 - `LINKS_KV` â€” hot-path read-through cache (TTL 300 s), URLhaus domain snapshot (`urlhaus:blocked_hosts`), global-insert rate counter (`insert_count:<minute-bucket>`)
 
-Var set in `wrangler.jsonc`: `APP_BASE_URL=https://aadd.li`. Observability is enabled (`"observability": { "enabled": true }`).
+Vars set in `wrangler.jsonc`: `APP_BASE_URL=https://aadd.li`, `MAIL_NOTIFY_URL=https://abuse.szathmary.net/api/abuse-notify`. Observability is enabled (`"observability": { "enabled": true }`).
 
 ## Commands
 
@@ -71,6 +72,8 @@ npx wrangler d1 execute hello-cf-spa-db --local --file=sql/bypass_clicks.sql
 npx wrangler d1 execute hello-cf-spa-db --local --file=sql/links_phase6_revalidation_index.sql
 npx wrangler d1 execute hello-cf-spa-db --local --file=sql/admin.sql
 npx wrangler d1 execute hello-cf-spa-db --local --file=sql/links_phase6_burst_revalidation.sql
+npx wrangler d1 execute hello-cf-spa-db --local --file=sql/abuse_reports.sql
+npx wrangler d1 execute hello-cf-spa-db --local --file=sql/abuse_form_reports.sql
 ```
 
 For remote (production): replace `--local` with `--remote`.
@@ -85,6 +88,7 @@ For remote (production): replace `--local` with `--remote`.
 | POST | `/logout` | `handleLogout` |
 | POST | `/api/links/anonymous` | `handleCreateAnonymousLink` |
 | POST | `/api/links` | `handleCreateLink` |
+| POST | `/api/report/:code` | `handleReportAbuse` |
 | GET | `/api/links` | `handleGetLinks` (cursor-based pagination: `?cursor=ISO\|id&limit=N`, default 50, max 100) |
 | POST | `/api/links/:code/update` | `handleUpdateLink` |
 | POST | `/api/links/:code/delete` | `handleDeleteLink` |
@@ -130,8 +134,9 @@ For remote (production): replace `--local` with `--remote`.
 - **Anonymous links**: always get a hard 48 h expiry (`expires_at = now + 48h`); no title or alias; `user_id` stored as `NULL`. Sending a `tags` field on `POST /api/links/anonymous` is rejected with 400.
 - **Redirect anti-enumeration**: `handleRedirect` returns `404` for not-found, inactive (`is_active = 0`), **and** expired links â€” never `410`. This prevents short-code enumeration via status-code differences.
 - **CSRF token acquisition**: call `GET /api/me` while authenticated; the `csrfToken` field in the JSON response is the value to send as `X-CSRF-Token` on subsequent mutation requests. The token is `HMAC-SHA256(sessionId, SESSION_SECRET)` where `sessionId` is the `__Host-sid` cookie value.
+- **CSRF exemption**: `POST /api/report/:code` is intentionally public and routed before global `validateCsrf`; it is protected via per-IP rate limit + ASN dedup + hard cap.
 - **OAuth cookies**: `handleLogin` sets short-lived `__Host-oauth_state` and `__Host-oauth_nonce` cookies (`Max-Age=600`). After a successful callback, both are cleared and the user is redirected to `/app.html`. `getAllowedOrigins` (in `src/csrf.ts`) dynamically computes allowed origins from both `APP_BASE_URL` and the request's own origin, so CSRF validation works in every environment without extra config.
-- **Config limits**: `TARGET_URL_MAX_LEN = 2000`, `TITLE_MAX_LEN = 200`, `TAG_MAX_PER_LINK = 10`, `TAG_NAME_MAX_LEN = 50`, `SHORT_CODE_GENERATION_RETRIES = 5`, `GLOBAL_INSERT_CAP = 1000`, `QUEUE_DEPTH_THROTTLE_LIMIT = 5000`, `QUEUE_DEPTH_CACHE_TTL_MS = 30_000`, `BURST_REVALIDATION_CLICK_THRESHOLD = 40`, `BURST_REVALIDATION_WINDOW_HOURS = 6`, `ACTIVE_REVALIDATION_MEDIUM_DELTA_THRESHOLD = 50`, `ACTIVE_REVALIDATION_HIGH_DELTA_THRESHOLD = 100`, `ACTIVE_REVALIDATION_MEDIUM_RECHECK_HOURS = 1`, `ACTIVE_REVALIDATION_HIGH_RECHECK_MINUTES = 30` â€” all in `src/config.ts`; never hardcode these.
+- **Config limits**: `TARGET_URL_MAX_LEN = 2000`, `TITLE_MAX_LEN = 200`, `TAG_MAX_PER_LINK = 10`, `TAG_NAME_MAX_LEN = 50`, `SHORT_CODE_GENERATION_RETRIES = 5`, `GLOBAL_INSERT_CAP = 1000`, `QUEUE_DEPTH_THROTTLE_LIMIT = 5000`, `QUEUE_DEPTH_CACHE_TTL_MS = 30_000`, `BURST_REVALIDATION_CLICK_THRESHOLD = 40`, `BURST_REVALIDATION_WINDOW_HOURS = 6`, `ACTIVE_REVALIDATION_MEDIUM_DELTA_THRESHOLD = 50`, `ACTIVE_REVALIDATION_HIGH_DELTA_THRESHOLD = 100`, `ACTIVE_REVALIDATION_MEDIUM_RECHECK_HOURS = 1`, `ACTIVE_REVALIDATION_HIGH_RECHECK_MINUTES = 30`, `ABUSE_WARN_THRESHOLD = 2`, `ABUSE_HARD_LIMIT = 10`, `ABUSE_REPORT_RATE_LIMIT = 20` â€” all in `src/config.ts`; never hardcode these.
 
 ## Data Format Contracts
 
@@ -173,6 +178,7 @@ This D1 database is also read by an external stats/paywall worker. Schema change
 - Format of `users.id` and `sessions.id` (32- and 48-char hex) is part of the contract.
 - `SESSION_SECRET` is the shared secret if external workers want to validate CSRF tokens (`HMAC-SHA256(sessionId, SESSION_SECRET)`).
 - Never rename or reorder columns in `users` or `sessions` without coordinating with all consumers.
+- `links.abuse_flag_count` and table `abuse_reports` are internal abuse-mitigation state and are not part of the external Wächter/stats data format contract.
 
 ## Testing
 
@@ -188,9 +194,10 @@ Tests use `@cloudflare/vitest-pool-workers` (Miniflare). Shared utilities live i
 | `setupSecurityScansTable(db)` | Creates `security_scans` table |
 | `setupClicksTable(db)` | Creates `clicks` table and indexes |
 | `setupBypassClicksTable(db)` | Creates `bypass_clicks` table |
+| `setupAbuseReportsTable(db)` | Creates `abuse_reports` table |
 | `seedSession(db, opts?)` | Inserts a user + valid session; returns `{ userId, sessionId }` |
-| `seedLink(db, opts)` | Inserts a link row; returns `{ id, shortCode }`. Accepts Phase-6 fields: `checked`, `status`, `manualOverride`, `claimedAt` |
-| `makeRequest(url, method?, opts?)` | Builds a `Request` with cookies/headers/body |
+| `seedLink(db, opts)` | Inserts a link row; returns `{ id, shortCode }`. Accepts Phase-6 fields: `checked`, `status`, `manualOverride`, `claimedAt`, `abuseFlagCount` |
+| `makeRequest(url, method?, opts?)` | Builds a `Request` with cookies/headers/body and optional `cf` context |
 | `buildFakeIdToken(payload, headerOverrides?)` | Creates a Base64-only (unsigned) JWT for mocking Google OAuth |
 | `createLinksKvMock()` | Returns an in-memory KV mock with `reset()` method; assign to `LinksKvMock` type |
 
@@ -350,15 +357,15 @@ Audit-Trail je Provider-Scan. `link_id` ist `TEXT` (Foreign Key auf `links.id` =
 
 ```
 KV.get(`link:${code}`)
-  HIT  â†’ { target_url, is_active, status, id, user_id, expires_at } aus Cache (TTL 300s)
-  MISS â†’ SELECT target_url, is_active, status, id, user_id, expires_at
+  HIT  â†’ { target_url, is_active, status, id, user_id, expires_at, abuse_flag_count, manual_override } aus Cache (TTL 300s)
+  MISS â†’ SELECT target_url, is_active, status, id, user_id, expires_at, abuse_flag_count, manual_override
          FROM links WHERE short_code = ?
          â†’ KV.put(`link:${code}`, payload, {expirationTtl: 300})
 
 Status-Hierarchie (User-Intent vor System-Intent):
   if (is_active === 0)         â†’ 404   // EigentÃ¼mer hat Link deaktiviert
   elif (status === 'blocked')  â†’ 404
-  elif (status === 'warning')  â†’ 302 â†’ /warning?code=:code
+  elif (status === 'warning' OR (abuse_flag_count >= ABUSE_WARN_THRESHOLD AND manual_override = 0))  â†’ 302 â†’ /warning?code=:code
   else                         â†’ 302 â†’ target_url
 ```
 
@@ -367,6 +374,17 @@ KV-Update nach WÃ¤chter-Scan und Admin-Mutation: `handleInternalScanResult` un
 Cache-Invalidierung nach User-Aktion: Toggle `is_active` und Inline-Edit `short_code` fÃ¼hren `KV.delete` mit (implementiert — `handleUpdateLink` und `handleDeleteLink` via `ctx.waitUntil`).
 
 **Bekanntes Risiko:** Maximaler Drift zwischen D1 und KV wenn `LINKS_KV` Binding nicht konfiguriert: Worker schlÃ¤gt fehl open (kein Crash). Maximaler TTL-Drift: 5 Minuten. FÃ¼r Spam-Schutz akzeptiert.
+
+### Abuse-Meldungen (implementiert)
+
+- Öffentlicher Endpoint: `POST /api/report/:code` (bewusst CSRF-exempt, vor globalem CSRF-Gate geroutet).
+- Abuse-Dedup: `abuse_reports` dedupliziert pro `(link_id, asn)`; `link_id` ist immutable und verhindert Alias-Bypass.
+- Escalation: `abuse_flag_count` wird bis `ABUSE_HARD_LIMIT` erhöht; bei `ABUSE_WARN_THRESHOLD` wird `active -> warning` gespiegelt und KV per `put()` aktualisiert.
+- KV-Payload für `link:${code}` führt `manual_override` jetzt durchgängig mit; beim KV-HIT gilt für Legacy-Einträge ohne Feld `manual_override ?? 0`.
+- Mail-Policy: fire-and-forget via `ctx.waitUntil(fetch)`; Events nur bei erster Meldung (`abuse_report`) und Schwellenüberschreitung (`abuse_escalation`).
+- Produktions-Endpoint für Abuse-Mails: `MAIL_NOTIFY_URL = https://abuse.szathmary.net/api/abuse-notify` (nicht `mail.aadd.li`).
+- Wächter-Floor: `handleInternalScanResult` kann abuse-erzwungenes `warning` nicht auf `active` zurückstufen; `blocked` bleibt möglich.
+- Admin-Reset: `PATCH /api/admin/links/:id` mit `abuse_flag_count = 0` setzt den Zähler zurück und löscht `abuse_reports`; `status` wird dabei bewusst nicht automatisch verändert.
 
 ### `/api/internal/links/pending` â€” Tiered Revalidation (Phase 6, implementiert)
 

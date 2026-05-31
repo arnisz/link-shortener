@@ -1,5 +1,64 @@
 # Status Log
 
+## 2026-05-31 — Abschluss: Abuse-Mailserver live geschaltet
+
+**Status:** implementiert ✅ — 2026-05-31
+
+### Umgesetzte Aenderungen
+
+- `wrangler.jsonc` — produktive `MAIL_NOTIFY_URL` von der veralteten Dokumentationsadresse auf den live Endpoint `https://abuse.szathmary.net/api/abuse-notify` umgestellt.
+- `worker-configuration.d.ts` — via `wrangler types` neu generiert; die literal types fuer `MAIL_NOTIFY_URL` spiegeln jetzt den aktualisierten Produktionswert.
+- `test/abuse.spec.ts` — Mail-Notify-Vertragstest gehaertet: erster Abuse-Report prueft jetzt zusaetzlich Ziel-URL, `Authorization: Bearer ${MAIL_NOTIFY_TOKEN}`, `Content-Type` sowie den JSON-Payload (`event`, `short_code`, `link_id`, `target_url`, `asn`, `abuse_flag_count`, `reported_at`).
+- `AGENTS.md` — `MAIL_NOTIFY_TOKEN` als erforderliches Secret dokumentiert; `MAIL_NOTIFY_URL` und der live Abuse-Endpoint in den Bindings-/Abuse-Konventionen nachgezogen.
+- `abuse-prevention.md` — Mail-Kontrakt auf den live Endpunkt aktualisiert; die veraltete Annahme eines noch separat zu bauenden Mailserver-Endpunkts entfernt.
+
+### Verifikation
+
+- Typgenerierung: `npm run cf-typegen`
+- Gezielte Suite: `npm test -- abuse.spec.ts --run` → **20/20** Tests bestanden.
+- Gesamtsuite: `npm test -- --run` → **946/946** Tests bestanden.
+
+## 2026-05-30 — Fix: Abuse-Hot-Path an manual_override gekoppelt
+
+**Status:** implementiert ✅ — 2026-05-30
+
+### Umgesetzte Aenderungen
+
+- `src/handlers/links.ts` — Redirect-Hot-Path liest/schreibt `manual_override` im `link:`-KV-Payload; Legacy-KV-Eintraege ohne Feld werden als `manual_override = 0` behandelt; Warning-Branch jetzt: `status='warning' OR (abuse_flag_count >= ABUSE_WARN_THRESHOLD AND manual_override = 0)`.
+- `src/handlers/internal.ts` — `handleInternalScanResult` gibt `manual_override` im `RETURNING` mit zurueck und schreibt es in den KV-Payload.
+- `src/handlers/admin.ts` — `handleAdminUpdateLink` gibt `manual_override` im `RETURNING` mit zurueck und schreibt den Post-Update-Wert in den KV-Payload.
+- `src/handlers/abuse.ts` — Eskalations-KV-Write fuehrt `manual_override` jetzt ebenfalls mit, damit die `link:`-Payload-Shape konsistent bleibt.
+- `test/abuse.spec.ts` — 5 neue Tests fuer Override-vs-Abuse, Legacy-KV-Kompatibilitaet und beide Admin-Reset-Wege; bestehende KV-Payload-Assertions um `manual_override` erweitert.
+- `AGENTS.md` — Hot-Path-Hierarchie dokumentiert jetzt den an `manual_override = 0` gekoppelten Abuse-Zweig sowie `manual_override` im KV-Payload.
+
+### Verifikation
+
+- Gezielte Suite: `test/abuse.spec.ts` → **16/16** Tests bestanden.
+- Gesamtsuite: `npm test -- --run` → **942/942** Tests bestanden.
+
+---
+
+## 2026-05-30 — Implementierung: Automatisiertes Abuse-Meldungssystem
+
+**Status:** implementiert ✅ — 2026-05-30
+
+### Umgesetzte Aenderungen
+
+- `sql/abuse_reports.sql` — neue additive Migration mit `links.abuse_flag_count` und neuer Tabelle `abuse_reports` (`UNIQUE(link_id, asn)`, Index auf `link_id`).
+- `src/handlers/abuse.ts` + `src/index.ts` — neuer oeffentlicher Endpoint `POST /api/report/:code` (CSRF-exempt vor globalem Gate), ASN-Dedup, Hard-Cap, Status-Mirror `active -> warning`, KV-`put()` bei Eskalation und fire-and-forget Mail-Notify.
+- `src/handlers/links.ts` — Redirect-Hot-Path und KV-Payload um `abuse_flag_count` erweitert; Warning-Branch reagiert auf `status='warning'` **oder** `abuse_flag_count >= ABUSE_WARN_THRESHOLD`.
+- `src/handlers/internal.ts` — Abuse-Floor in `handleInternalScanResult`: eingehendes `active` bleibt bei aktivem Abuse-Signal mindestens `warning`, `blocked` bleibt dominant.
+- `src/handlers/admin.ts` + `public/user-administration.html` + `public/user-administration.js` — Admin-Linkliste zeigt `abuse_flag_count`; neuer Abuse-Reset ueber `PATCH /api/admin/links/:id` mit `abuse_flag_count=0`, Loeschung zugehoeriger `abuse_reports`, KV-Refresh; `status` wird dabei nicht automatisch zurueckgesetzt.
+- `src/config.ts`, `src/types.ts`, `wrangler.jsonc`, `vitest.config.mts` — neue Abuse-Limits und Mail-Bindings (`MAIL_NOTIFY_URL`/`MAIL_NOTIFY_TOKEN`) fuer Worker + Tests.
+- `test/helpers.ts` + `test/abuse.spec.ts` — neue Abuse-Testinfrastruktur (`setupAbuseReportsTable`, `makeRequest` mit optionalem `cf`, `seedLink` mit `abuseFlagCount`) und neue Integrationssuite fuer Report-Flow, Dedup, Hard-Limit, AS0-Fallback, Mail-SPOF, Rate-Limit, Abuse-Floor und Admin-Reset.
+- `AGENTS.md` — Migrationreihenfolge, neue API-Route, Abuse-Konventionen, Hot-Path-Hierarchie und Limits dokumentiert; `abuse_flag_count`/`abuse_reports` als nicht-kontraktuelle interne Felder ergaenzt.
+
+### Folge-Ticket
+
+- Mailserver-Empfangsendpunkt fuer den Worker-Mail-Kontrakt ist explizit nicht Teil dieses Repos/Tasks.
+
+---
+
 ## 2026-05-14 — Implementierung: Adaptive Active-Revalidation nach Klickdelta seit letztem Scan
 
 **Status:** implementiert ✅ — 2026-05-14

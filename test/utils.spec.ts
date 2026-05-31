@@ -335,5 +335,32 @@ describe("applySecurityHeaders", () => {
 		const res = applySecurityHeaders(base);
 		expect(res.headers.get("content-type")).toContain("application/json");
 	});
+
+	it("keeps the default Worker CSP on /report", () => {
+		const req = new Request("https://aadd.li/report");
+		const csp = applySecurityHeaders(makeResponse(), req).headers.get("Content-Security-Policy") ?? "";
+		expect(csp).toContain("script-src 'self'");
+		expect(csp).not.toContain("https://challenges.cloudflare.com");
+	});
+
+	it("keeps the default Worker CSP on /report.html", () => {
+		const req = new Request("https://aadd.li/report.html");
+		const csp = applySecurityHeaders(makeResponse(), req).headers.get("Content-Security-Policy") ?? "";
+		expect(csp).toContain("script-src 'self'");
+		expect(csp).not.toContain("https://challenges.cloudflare.com");
+	});
+
+	it("keeps the default Worker CSP on /report/", () => {
+		const req = new Request("https://aadd.li/report/");
+		const csp = applySecurityHeaders(makeResponse(), req).headers.get("Content-Security-Policy") ?? "";
+		expect(csp).toContain("script-src 'self'");
+		expect(csp).not.toContain("https://challenges.cloudflare.com");
+	});
+
+	it("keeps default CSP on unrelated paths", () => {
+		const req = new Request("https://aadd.li/app.html");
+		const csp = applySecurityHeaders(makeResponse(), req).headers.get("Content-Security-Policy") ?? "";
+		expect(csp).not.toContain("https://challenges.cloudflare.com");
+	});
 });
 

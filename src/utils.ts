@@ -88,18 +88,24 @@ export function log(category: string, message: string): void {
 	console.log(`[${category}] ${message}`);
 }
 
-export function applySecurityHeaders(response: Response): Response {
+function buildContentSecurityPolicy(): string {
+	const directives = [
+		"default-src 'self'",
+		"script-src 'self'",
+		"style-src 'self' 'unsafe-inline'",
+		"img-src 'self' data: https://lh3.googleusercontent.com",
+		"connect-src 'self' https://accounts.google.com",
+		"frame-ancestors 'none'"
+	];
+
+	return `${directives.join("; ")};`;
+}
+
+export function applySecurityHeaders(response: Response, request?: Request): Response {
 	const headers = new Headers(response.headers);
 
 	// Prevent clickjacking — no framing allowed from other origins
-	headers.set('Content-Security-Policy',
-		"default-src 'self'; " +
-		"script-src 'self'; " +
-		"style-src 'self' 'unsafe-inline'; " +
-		"img-src 'self' data: https://lh3.googleusercontent.com; " +
-		"connect-src 'self' https://accounts.google.com; " +
-		"frame-ancestors 'none';"
-	);
+	headers.set('Content-Security-Policy', buildContentSecurityPolicy());
 
 	// Belt-and-suspenders clickjacking protection (older browsers)
 	headers.set('X-Frame-Options', 'DENY');

@@ -11,6 +11,7 @@ import {
 	ACTIVE_REVALIDATION_HIGH_RECHECK_MINUTES,
 	ACTIVE_REVALIDATION_MEDIUM_DELTA_THRESHOLD,
 	ACTIVE_REVALIDATION_MEDIUM_RECHECK_HOURS,
+	ABUSE_WARN_THRESHOLD,
 	BURST_REVALIDATION_CLICK_THRESHOLD,
 	BURST_REVALIDATION_WINDOW_HOURS,
 } from "../config";
@@ -235,22 +236,27 @@ export async function handleInternalScanResult(id: string, request: Request, env
 
 	// 1. Update links row — only if manual_override = 0
 	let short_code: string | null = null;
-	let updatedLink: { short_code: string; target_url: string; is_active: number; expires_at: string | null; user_id: string | null } | null = null;
+	let updatedLink: { short_code: string; target_url: string; is_active: number; status: "active" | "warning" | "blocked"; expires_at: string | null; user_id: string | null; abuse_flag_count: number; manual_override: number } | null = null;
 	try {
 		updatedLink = await env.hello_cf_spa_db
 			.prepare(
 				`UPDATE links
 				 SET checked = 1,
 				     spam_score = ?,
-				     status = ?,
+				     status = CASE
+				                WHEN ? = 'blocked' THEN 'blocked'
+				                WHEN ? = 'warning' THEN 'warning'
+				                WHEN abuse_flag_count >= ? THEN 'warning'
+				                ELSE ?
+				              END,
 				     last_checked_at = datetime('now'),
 				     claimed_at = NULL,
 				     last_scanned_click_count = click_count
 				 WHERE id = ? AND manual_override = 0
-				 RETURNING short_code, target_url, is_active, expires_at, user_id`
+				 RETURNING short_code, target_url, is_active, status, expires_at, user_id, abuse_flag_count, manual_override`
 			)
-			.bind(body.aggregate_score, body.status, id)
-			.first<{ short_code: string; target_url: string; is_active: number; expires_at: string | null; user_id: string | null }>();
+			.bind(body.aggregate_score, body.status, body.status, ABUSE_WARN_THRESHOLD, body.status, id)
+			.first<{ short_code: string; target_url: string; is_active: number; status: "active" | "warning" | "blocked"; expires_at: string | null; user_id: string | null; abuse_flag_count: number; manual_override: number }>();
 
 		if (!updatedLink) {
 			// Could be: link not found, or manual_override = 1.
@@ -331,8 +337,10 @@ export async function handleInternalScanResult(id: string, request: Request, env
 					user_id: updatedLink.user_id,
 					target_url: updatedLink.target_url,
 					is_active: updatedLink.is_active,
-					status: body.status,
+					status: updatedLink.status,
 					expires_at: updatedLink.expires_at,
+					abuse_flag_count: updatedLink.abuse_flag_count,
+					manual_override: updatedLink.manual_override,
 				}),
 				{ expirationTtl: 300 }
 			);
@@ -341,7 +349,7 @@ export async function handleInternalScanResult(id: string, request: Request, env
 		}
 	}
 
-	log("INTERNAL", `scan-result written: id=${id} status=${body.status} score=${body.aggregate_score}`);
+	log("INTERNAL", `scan-result written: id=${id} status=${updatedLink?.status ?? body.status} score=${body.aggregate_score}`);
 	return jsonResponse({ ok: true });
 }
 

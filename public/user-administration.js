@@ -223,7 +223,7 @@
 				(l.user_email ?? '').toLowerCase().includes(q))
 			: allLinks;
 		if (!filtered.length) {
-			linksTbody.innerHTML = '<tr><td colspan="9" style="color:#888;text-align:center">Keine Links gefunden.</td></tr>';
+			linksTbody.innerHTML = '<tr><td colspan="10" style="color:#888;text-align:center">Keine Links gefunden.</td></tr>';
 			return;
 		}
 		linksTbody.innerHTML = filtered.map(l => {
@@ -231,6 +231,7 @@
 			return `<tr data-id="${esc(l.id)}">
 				<td style="white-space:nowrap">
 					<button class="btn btn-delete" data-action="delete-link" data-id="${esc(l.id)}" data-short-code="${esc(l.short_code)}" title="Link löschen">🗑</button>
+					<button class="btn btn-reset" data-action="reset-abuse" data-id="${esc(l.id)}" data-short-code="${esc(l.short_code)}" title="Abuse-Zähler zurücksetzen">Reset Abuse</button>
 				</td>
 				<td><a href="/r/${esc(l.short_code)}" target="_blank" rel="noopener">${esc(l.short_code)}</a></td>
 				<td><span class="truncate" title="${esc(l.target_url)}">${esc(l.target_url)}</span></td>
@@ -248,6 +249,7 @@
 						placeholder="0.00" />
 					<button class="btn btn-save" data-action="save-score" data-id="${esc(l.id)}" data-short-code="${esc(l.short_code)}">✓</button>
 				</td>
+				<td>${l.abuse_flag_count ?? 0}</td>
 				<td><span class="badge ${activeClass}">${l.is_active ? 'Ja' : 'Nein'}</span></td>
 				<td>${l.click_count ?? 0}</td>
 				<td title="${esc(l.user_id ?? '')}">${esc(l.user_email ?? '–')}</td>
@@ -312,6 +314,17 @@
 			const ok = await adminLinkAction('delete-link', id);
 			if (ok) {
 				allLinks = allLinks.filter(l => l.id !== id);
+				renderLinks();
+			}
+			return;
+		}
+
+		if (action === 'reset-abuse') {
+			if (!confirm(`Abuse-Zähler für "${shortCode}" zurücksetzen?\nDer Wächter-Status wird dabei nicht automatisch geändert.`)) return;
+			const ok = await adminLinkAction('reset-abuse', id, { abuse_flag_count: 0 });
+			if (ok) {
+				const link = allLinks.find(l => l.id === id);
+				if (link) link.abuse_flag_count = 0;
 				renderLinks();
 			}
 			return;

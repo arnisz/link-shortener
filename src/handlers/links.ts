@@ -1,5 +1,5 @@
 import type { Env } from "../types";
-import { TARGET_URL_MAX_LEN, TITLE_MAX_LEN, SHORT_CODE_GENERATION_RETRIES, TAG_MAX_PER_LINK, GLOBAL_INSERT_CAP, QUEUE_DEPTH_THROTTLE_LIMIT, QUEUE_DEPTH_CACHE_TTL_MS } from "../config";
+import { TARGET_URL_MAX_LEN, TITLE_MAX_LEN, SHORT_CODE_GENERATION_RETRIES, TAG_MAX_PER_LINK, GLOBAL_INSERT_CAP, QUEUE_DEPTH_THROTTLE_LIMIT, QUEUE_DEPTH_CACHE_TTL_MS, ABUSE_WARN_THRESHOLD } from "../config";
 import { randomId, jsonResponse, errResponse, log, getCookie, sanitizeReferrer } from "../utils";
 import { generateShortCode, validateAlias, normalizeAlias, isValidFutureIso, requireJson, checkSpamFilter, validateTargetUrl, validateTag } from "../validation";
 import { checkRateLimit } from "../rateLimit";
@@ -746,29 +746,34 @@ export async function handleRedirect(code: string, env: Env, ctx: ExecutionConte
 				}
 
 				// --- Hot-Path mit KV-Cache (TTL 300s) ---
-				let cache: { id: string; user_id: string | null; target_url: string; is_active: number; status?: string; expires_at?: string } | null = null;
+				let cache: { id: string; user_id: string | null; target_url: string; is_active: number; status?: string; expires_at?: string; abuse_flag_count?: number; manual_override?: number } | null = null;
 				if (env.LINKS_KV) {
 					try {
 						const raw = await env.LINKS_KV.get(`link:${code}`);
 						if (raw) {
-							cache = JSON.parse(raw);
+							const parsed = JSON.parse(raw) as { id: string; user_id: string | null; target_url: string; is_active: number; status?: string; expires_at?: string; abuse_flag_count?: number; manual_override?: number };
+							cache = {
+								...parsed,
+								abuse_flag_count: parsed.abuse_flag_count ?? 0,
+								manual_override: parsed.manual_override ?? 0,
+							};
 						}
 					} catch {}
 				}
 
-				let link: { id: string; user_id: string | null; target_url: string; is_active: number; status?: string; expires_at?: string } | null = null;
+				let link: { id: string; user_id: string | null; target_url: string; is_active: number; status?: string; expires_at?: string; abuse_flag_count?: number; manual_override?: number } | null = null;
 				if (cache) {
 					link = cache;
 				} else {
 					// Fallback: DB-Query
 					link = await env.hello_cf_spa_db
-						.prepare("SELECT id, user_id, target_url, is_active, status, expires_at FROM links WHERE short_code = ?")
+						.prepare("SELECT id, user_id, target_url, is_active, status, expires_at, abuse_flag_count, manual_override FROM links WHERE short_code = ?")
 						.bind(code)
 						.first();
 					if (link && env.LINKS_KV) {
 						// Write to KV for next time (inkl. id + user_id für async click-count)
 						ctx.waitUntil(env.LINKS_KV.put(`link:${code}`,
-							JSON.stringify({ id: link.id, user_id: link.user_id, target_url: link.target_url, is_active: link.is_active, status: link.status, expires_at: link.expires_at }),
+							JSON.stringify({ id: link.id, user_id: link.user_id, target_url: link.target_url, is_active: link.is_active, status: link.status, expires_at: link.expires_at, abuse_flag_count: link.abuse_flag_count ?? 0, manual_override: link.manual_override ?? 0 }),
 							{ expirationTtl: 300 }
 						));
 					}
@@ -788,7 +793,7 @@ export async function handleRedirect(code: string, env: Env, ctx: ExecutionConte
 					log("REDIRECT", `Blocked: code=\"${code}\"`);
 					return errResponse("Short link not found", 404);
 				}
-				if (link.status === "warning") {
+				if (link.status === "warning" || ((link.abuse_flag_count ?? 0) >= ABUSE_WARN_THRESHOLD && (link.manual_override ?? 0) === 0)) {
 					log("REDIRECT", `Warning: code=\"${code}\"`);
  				return new Response(null, { status: 302, headers: { Location: `/warning?code=${code}` } });
 				}

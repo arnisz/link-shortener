@@ -3,6 +3,7 @@ import { jsonResponse, errResponse, log } from "../utils";
 import { getSessionUser } from "../auth/session";
 import { validateMutationCsrf } from "../csrf";
 import { requireJson } from "../validation";
+import { ABUSE_HARD_LIMIT } from "../config";
 
 // ---------------------------------------------------------------------------
 // Auth helper
@@ -60,7 +61,7 @@ export async function handleAdminGetLinks(request: Request, env: Env): Promise<R
 		const [cursorTs, cursorId] = parts;
 		const result = await env.hello_cf_spa_db
 			.prepare(
-				`SELECT l.id, l.short_code, l.target_url, l.status, l.spam_score, l.is_active, l.click_count,
+				`SELECT l.id, l.short_code, l.target_url, l.status, l.spam_score, l.abuse_flag_count, l.is_active, l.click_count,
 				        l.created_at, l.user_id, u.email AS user_email
 				 FROM links l
 				 LEFT JOIN users u ON u.id = l.user_id
@@ -74,7 +75,7 @@ export async function handleAdminGetLinks(request: Request, env: Env): Promise<R
 	} else {
 		const result = await env.hello_cf_spa_db
 			.prepare(
-				`SELECT l.id, l.short_code, l.target_url, l.status, l.spam_score, l.is_active, l.click_count,
+				`SELECT l.id, l.short_code, l.target_url, l.status, l.spam_score, l.abuse_flag_count, l.is_active, l.click_count,
 				        l.created_at, l.user_id, u.email AS user_email
 				 FROM links l
 				 LEFT JOIN users u ON u.id = l.user_id
@@ -242,8 +243,8 @@ export async function handleAdminDeleteUser(
 
 /**
  * Updates a link across all users by immutable link id.
- * Allowed fields: status and/or spam_score.
- * Always sets manual_override=1 so the Wächter no longer overwrites status.
+ * Allowed fields: status and/or spam_score and/or abuse_flag_count.
+ * manual_override=1 is set only when status/spam_score are changed by admin.
  */
 export async function handleAdminUpdateLink(
 	id: string,
@@ -261,15 +262,16 @@ export async function handleAdminUpdateLink(
 		return errResponse("Content-Type must be application/json", 415);
 	}
 
-	let body: { status?: unknown; spam_score?: unknown };
+	let body: { status?: unknown; spam_score?: unknown; abuse_flag_count?: unknown };
 	try {
 		body = await request.json();
 	} catch {
 		return errResponse("Invalid JSON body", 400);
 	}
 
-	const setClauses: string[] = ["updated_at = ?", "manual_override = 1"];
+	const setClauses: string[] = ["updated_at = ?"];
 	const binds: unknown[] = [new Date().toISOString()];
+	let setManualOverride = false;
 
 	if (body.status !== undefined) {
 		if (typeof body.status !== "string" || !["active", "warning", "blocked"].includes(body.status)) {
@@ -277,6 +279,7 @@ export async function handleAdminUpdateLink(
 		}
 		setClauses.push("status = ?");
 		binds.push(body.status);
+		setManualOverride = true;
 	}
 
 	if (body.spam_score !== undefined) {
@@ -285,16 +288,34 @@ export async function handleAdminUpdateLink(
 		}
 		setClauses.push("spam_score = ?");
 		binds.push(body.spam_score);
+		setManualOverride = true;
 	}
 
-	if (body.status === undefined && body.spam_score === undefined) {
+	if (body.abuse_flag_count !== undefined) {
+		if (
+			typeof body.abuse_flag_count !== "number" ||
+			!Number.isInteger(body.abuse_flag_count) ||
+			body.abuse_flag_count < 0 ||
+			body.abuse_flag_count > ABUSE_HARD_LIMIT
+		) {
+			return errResponse("Invalid abuse_flag_count", 400);
+		}
+		setClauses.push("abuse_flag_count = ?");
+		binds.push(body.abuse_flag_count);
+	}
+
+	if (setManualOverride) {
+		setClauses.push("manual_override = 1");
+	}
+
+	if (body.status === undefined && body.spam_score === undefined && body.abuse_flag_count === undefined) {
 		return errResponse("No valid fields to update", 400);
 	}
 
 	const result = await env.hello_cf_spa_db
 		.prepare(
 			`UPDATE links SET ${setClauses.join(", ")} WHERE id = ?
-			 RETURNING short_code, id, target_url, is_active, status, expires_at, user_id`
+			 RETURNING short_code, id, target_url, is_active, status, expires_at, user_id, abuse_flag_count, manual_override`
 		)
 		.bind(...binds, id)
 		.first<{
@@ -305,10 +326,19 @@ export async function handleAdminUpdateLink(
 			status: string;
 			expires_at: string | null;
 			user_id: string | null;
+			abuse_flag_count: number;
+			manual_override: number;
 		}>();
 
 	if (!result) {
 		return errResponse("Link not found", 404);
+	}
+
+	if (body.abuse_flag_count === 0) {
+		await env.hello_cf_spa_db
+			.prepare("DELETE FROM abuse_reports WHERE link_id = ?")
+			.bind(id)
+			.run();
 	}
 
 	if (env.LINKS_KV) {
@@ -324,6 +354,8 @@ export async function handleAdminUpdateLink(
 				is_active: result.is_active,
 				status: result.status,
 				expires_at: result.expires_at,
+				abuse_flag_count: result.abuse_flag_count,
+				manual_override: result.manual_override,
 			}),
 			{ expirationTtl: 300 }
 		));
@@ -386,4 +418,3 @@ export async function handleAdminDeleteLink(
 	log("ADMIN", `Link deleted: id=${id} by admin=${adminId.slice(0, 8)}…`);
 	return jsonResponse({ ok: true });
 }
-

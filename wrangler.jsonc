@@ -20,12 +20,16 @@
 		}
 	],
 	"vars": {
-		"APP_BASE_URL": "https://aadd.li"
+		"APP_BASE_URL": "https://aadd.li",
+		"MAIL_NOTIFY_URL": "https://abuse.szathmary.net/api/abuse-notify",
+		"TURNSTILE_SITE_KEY": "0x4AAAAAADbpOlBRRbbVqTc5"
 	},
 	"env": {
 		"dev": {
 			"vars": {
-				"APP_BASE_URL": "http://127.0.0.1:8787"
+				"APP_BASE_URL": "http://127.0.0.1:8787",
+				"MAIL_NOTIFY_URL": "http://127.0.0.1:8787/internal/mail-notify",
+				"TURNSTILE_SITE_KEY": "1x00000000000000000000AA"
 			},
 			"d1_databases": [
 				{

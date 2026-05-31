@@ -4,9 +4,11 @@ import { handleCreateLink, handleGetLinks, handleUpdateLink, handleDeleteLink, h
 import { handleInternalHealth, handleInternalLinksPending, handleInternalScanResult, handleInternalReleaseStale, handleInternalMetrics, handleInternalUpdateUrlhaus } from "./handlers/internal";
 import { handleWarning, handleWarningProceed } from "./handlers/warning";
 import { handleAdminGetLinks, handleAdminGetUsers, handleAdminBlockUser, handleAdminUnblockUser, handleAdminDeleteUser, handleAdminUpdateLink, handleAdminDeleteLink } from "./handlers/admin";
+import { handleReportAbuse } from "./handlers/abuse";
+import { handleReportForm } from "./handlers/report-form";
 import { applySecurityHeaders, errResponse, log } from "./utils";
 import { validateCsrf } from "./csrf";
-import { SECURITY_POLICY_TXT, SECURITY_TXT } from './config';
+import { SECURITY_POLICY_TXT, SECURITY_TXT, ABUSE_FORM_RETENTION_DAYS } from './config';
 
 async function router(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 	const url = new URL(request.url);
@@ -23,6 +25,15 @@ async function router(request: Request, env: Env, ctx: ExecutionContext): Promis
 		return new Response(SECURITY_POLICY_TXT, {
 			headers: { 'Content-Type': 'text/plain; charset=utf-8' }
 		});
+	}
+
+	const reportAbuseMatch = pathname.match(/^\/api\/report\/([a-zA-Z0-9_-]+)$/);
+	if (reportAbuseMatch && method === "POST") {
+		return handleReportAbuse(reportAbuseMatch[1], request, env, ctx);
+	}
+
+	if (pathname === "/api/report-form" && method === "POST") {
+		return handleReportForm(request, env, ctx);
 	}
 
 	// ── CSRF protection: reject cross-origin POST requests ────────────────────
@@ -101,9 +112,9 @@ async function router(request: Request, env: Env, ctx: ExecutionContext): Promis
 }
 
 export default {
- 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
- 		return applySecurityHeaders(await router(request, env, ctx));
- 	},
+	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+		return applySecurityHeaders(await router(request, env, ctx), request);
+	},
 
 	/** Scheduled cleanup: deletes expired anonymous links so their click logs are removed via ON DELETE CASCADE.
 	 * Runs as a Cron Trigger. To configure, add a cron entry to wrangler.jsonc (example: daily).
@@ -168,6 +179,27 @@ export default {
 			else log("CLEANUP", `security_scans cleanup finished, total deleted=${scanTotal}`);
 		} catch (e) {
 			log("CLEANUP_ERR", `security_scans cleanup failed: ${String(e)}`);
+		}
+
+		// ── 3. abuse_form_reports retention (max. ~4 Tage) ───────────────────────
+		try {
+			let formDeleted = 0;
+			let formTotal = 0;
+			do {
+				const res = await env.hello_cf_spa_db
+					.prepare(
+						`DELETE FROM abuse_form_reports WHERE id IN (SELECT id FROM abuse_form_reports WHERE datetime(reported_at) < datetime('now', '-${ABUSE_FORM_RETENTION_DAYS} days') LIMIT ?)`
+					)
+					.bind(BATCH)
+					.run();
+				formDeleted = res.meta?.changes ?? 0;
+				formTotal += formDeleted;
+				if (formDeleted > 0) log("CLEANUP", `Deleted ${formDeleted} abuse_form_reports (>${ABUSE_FORM_RETENTION_DAYS}d)`);
+			} while (formDeleted === BATCH);
+			if (formTotal === 0) log("CLEANUP", "No stale abuse_form_reports found");
+			else log("CLEANUP", `abuse_form_reports cleanup finished, total deleted=${formTotal}`);
+		} catch (e) {
+			log("CLEANUP_ERR", `abuse_form_reports cleanup failed: ${String(e)}`);
 		}
 	}
 };

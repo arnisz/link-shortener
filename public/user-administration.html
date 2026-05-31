@@ -44,6 +44,8 @@
 		input.score-input { font-size: 0.82em; padding: 0.2rem 0.3rem; border-radius: 3px; border: 1px solid #ccc; width: 4.5rem; }
 		.btn-save { background: #1a73e8; color: #fff; }
 		.btn-save:hover { background: #1558b0; }
+		.btn-reset { background: #8e44ad; color: #fff; }
+		.btn-reset:hover { background: #6c3483; }
 		.pagination { margin-top: 0.7rem; display: flex; gap: 0.5rem; align-items: center; font-size: 0.88em; }
 		.pagination button { padding: 0.3rem 0.8rem; border: 1px solid #ccc; border-radius: 4px; background: #fff; cursor: pointer; }
 		.pagination button:disabled { opacity: 0.4; cursor: default; }
@@ -105,6 +107,7 @@
 					<th>Ziel-URL</th>
 					<th>Status</th>
 					<th>Spam-Score</th>
+					<th>Abuse-Flags</th>
 					<th>Aktiv</th>
 					<th>Klicks</th>
 					<th>User</th>
@@ -113,6 +116,7 @@
 			</thead>
 			<tbody id="links-tbody"></tbody>
 		</table>
+		<p style="font-size:0.85em;color:#666;margin-top:0.5rem;">Abuse-Reset setzt nur den Abuse-Zähler zurück. Der Wächter-Status bleibt bestehen.</p>
 		<div class="pagination" id="links-pagination">
 			<button id="links-prev-btn" disabled>← Zurück</button>
 			<span id="links-page-info"></span>

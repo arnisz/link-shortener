@@ -1,4 +1,4 @@
-const CACHE = 'aadd-v5';
+const CACHE = 'aadd-v7';
 const STATIC = [
   '/', '/index.html', '/index.js',
   '/manifest.json', '/favicon.ico',
@@ -22,6 +22,10 @@ self.addEventListener('activate', e => e.waitUntil(
 
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
+
+  if (url.origin !== self.location.origin) {
+    return;
+  }
 
   if (e.request.mode === 'navigate' && (
     url.pathname === '/login'

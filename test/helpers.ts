@@ -36,6 +36,7 @@ export function makeRequest(
 		cookies?: Record<string, string>;
 		body?: BodyInit;
 		headers?: Record<string, string>;
+		cf?: { asn?: number; country?: string; asOrganization?: string };
 	} = {}
 ): Request {
 	const headers: Record<string, string> = { ...(opts.headers ?? {}) };
@@ -46,7 +47,11 @@ export function makeRequest(
 			.join("; ");
 	}
 
-	return new Request(url, { method, headers, body: opts.body });
+	const request = new Request(url, { method, headers, body: opts.body });
+	if (opts.cf) {
+		Object.defineProperty(request, "cf", { value: opts.cf, configurable: true });
+	}
+	return request;
 }
 
 // ── D1 test database setup ────────────────────────────────────────────────────
@@ -168,6 +173,7 @@ export async function setupLinksTable(db: D1Database): Promise<void> {
 			 // Migration: links_phase6_burst_revalidation.sql
 			 await db.prepare(`ALTER TABLE links ADD COLUMN last_scanned_click_count INTEGER NOT NULL DEFAULT 0`).run();
 			 await db.prepare(`CREATE INDEX IF NOT EXISTS idx_links_burst_revalidation ON links(checked, manual_override, created_at, click_count, last_scanned_click_count, claimed_at)`).run();
+			 await db.prepare(`ALTER TABLE links ADD COLUMN abuse_flag_count INTEGER NOT NULL DEFAULT 0`).run();
 }
 
 /**
@@ -225,6 +231,7 @@ export async function seedLink(
 		manualOverride?: number;
 		claimedAt?: string | null;
 		lastScannedClickCount?: number;
+		abuseFlagCount?: number;
 	}
 ): Promise<{ id: string; shortCode: string }> {
 	const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
@@ -235,8 +242,8 @@ export async function seedLink(
 
 	await db
 		.prepare(
- 		`INSERT INTO links (id, user_id, short_code, target_url, title, created_at, updated_at, click_count, expires_at, is_active, checked, status, manual_override, claimed_at, last_scanned_click_count)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)`
+ 		`INSERT INTO links (id, user_id, short_code, target_url, title, created_at, updated_at, click_count, expires_at, is_active, checked, status, manual_override, claimed_at, last_scanned_click_count, abuse_flag_count)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)`
 		)
 		.bind(
 			id,
@@ -252,7 +259,8 @@ export async function seedLink(
 			opts.status ?? "active",
 			opts.manualOverride ?? 0,
 			opts.claimedAt ?? null,
-			opts.lastScannedClickCount ?? 0
+			opts.lastScannedClickCount ?? 0,
+			opts.abuseFlagCount ?? 0
 		)
 		.run();
 
@@ -356,6 +364,44 @@ export async function setupBypassClicksTable(db: D1Database): Promise<void> {
 		.run();
 	await db
 		.prepare(`CREATE INDEX IF NOT EXISTS idx_bypass_clicks_code_hour ON bypass_clicks(short_code, hour_bucket)`)
+		.run();
+}
+
+/**
+ * Creates the abuse_reports table in the test D1 database.
+ */
+export async function setupAbuseReportsTable(db: D1Database): Promise<void> {
+	await db
+		.prepare(
+			`CREATE TABLE IF NOT EXISTS abuse_reports (` +
+			`id INTEGER PRIMARY KEY AUTOINCREMENT, ` +
+			`link_id TEXT NOT NULL REFERENCES links(id) ON DELETE CASCADE, ` +
+			`asn TEXT NOT NULL, ` +
+			`reported_at TEXT NOT NULL, ` +
+			`UNIQUE(link_id, asn))`
+		)
+		.run();
+	await db
+		.prepare(`CREATE INDEX IF NOT EXISTS idx_abuse_reports_link ON abuse_reports(link_id)`)
+		.run();
+}
+
+/**
+ * Creates the abuse_form_reports table in the test D1 database.
+ */
+export async function setupAbuseFormReportsTable(db: D1Database): Promise<void> {
+	await db
+		.prepare(
+			`CREATE TABLE IF NOT EXISTS abuse_form_reports (` +
+			`id INTEGER PRIMARY KEY AUTOINCREMENT, ` +
+			`ip TEXT NOT NULL, ` +
+			`reported_at TEXT NOT NULL, ` +
+			`short_code TEXT, ` +
+			`raw_input TEXT NOT NULL)`
+		)
+		.run();
+	await db
+		.prepare(`CREATE INDEX IF NOT EXISTS idx_abuse_form_reports_reported_at ON abuse_form_reports(reported_at)`)
 		.run();
 }
 

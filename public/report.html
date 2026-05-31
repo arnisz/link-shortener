@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="de">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title data-i18n="report.page.title">Missbräuchlichen Link melden – aadd.li</title>
+	<link rel="stylesheet" href="/style.css" />
+	<meta name="description" data-i18n-content="report.page.description" content="Melde verdächtige oder missbräuchliche Links an aadd.li. Gib Kurz-URL oder Ziel-URL an und wir prüfen den Fall.">
+	<style>
+		body { min-height: 100vh; }
+		.report-page { padding: 32px 16px; }
+		.report-page .container { max-width: 760px; }
+		.report-topbar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1.5rem; }
+		.report-topbar a { color: #2563eb; text-decoration: none; font-weight: 600; }
+		.report-topbar a:hover { text-decoration: underline; }
+		.report-intro { color: #4b5563; line-height: 1.55; margin-bottom: 1rem; }
+		.report-notice {
+			background: #eff6ff;
+			border: 1px solid #bfdbfe;
+			border-radius: 10px;
+			padding: 1rem 1.1rem;
+			margin: 1.25rem 0 1.5rem;
+		}
+		.report-notice strong { display: block; margin-bottom: 0.35rem; }
+		.report-form { display: grid; gap: 1rem; }
+		.report-field label { display: block; font-weight: 600; margin-bottom: 0.45rem; }
+		.report-field small { display: block; color: #6b7280; margin-top: 0.35rem; }
+		.report-field input,
+		.report-field textarea {
+			width: 100%;
+			box-sizing: border-box;
+			padding: 0.85rem 0.95rem;
+			border: 1px solid #cbd5e1;
+			border-radius: 10px;
+			font: inherit;
+			background: #fff;
+		}
+		.report-field textarea { min-height: 140px; resize: vertical; }
+		.report-submit {
+			display: inline-flex;
+			justify-content: center;
+			align-items: center;
+			border: none;
+			border-radius: 999px;
+			background: #2563eb;
+			color: #fff;
+			font-weight: 700;
+			padding: 0.9rem 1.4rem;
+		}
+		.report-submit:disabled { opacity: 0.65; cursor: not-allowed; }
+		.report-status {
+			display: none;
+			padding: 0.95rem 1rem;
+			border-radius: 10px;
+			line-height: 1.45;
+		}
+		.report-status.success { display: block; background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; }
+		.report-status.error { display: block; background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; }
+		.report-footer { margin-top: 1.5rem; display: flex; gap: 1rem; flex-wrap: wrap; font-size: 0.95rem; }
+		@media (max-width: 640px) {
+			.report-topbar { flex-direction: column; align-items: flex-start; }
+		}
+	</style>
+</head>
+<body class="report-page">
+	<main class="container">
+		<div class="report-topbar">
+			<div class="lang-switcher" aria-label="Sprachauswahl">
+				<button type="button" data-set-lang="de" aria-label="Deutsch" title="Deutsch"><img src="/flags/de.png" alt="" aria-hidden="true"></button>
+				<button type="button" data-set-lang="en" aria-label="English" title="English"><img src="/flags/en.png" alt="" aria-hidden="true"></button>
+				<button type="button" data-set-lang="es" aria-label="Español" title="Español"><img src="/flags/es.png" alt="" aria-hidden="true"></button>
+				<button type="button" data-set-lang="fr" aria-label="Français" title="Français"><img src="/flags/fr.png" alt="" aria-hidden="true"></button>
+			</div>
+			<a href="/" data-i18n="report.back">← Zurück zur Startseite</a>
+		</div>
+
+		<h1 data-i18n="report.title">Missbräuchlichen Link melden</h1>
+		<p class="report-intro" data-i18n="report.intro">
+			Wenn dir ein aadd.li-Link oder eine Ziel-URL verdächtig vorkommt, kannst du sie hier manuell melden. Wir prüfen jede Meldung und werten sie zusammen mit weiteren Signalen aus.
+		</p>
+
+		<section class="report-notice" aria-label="Hinweis">
+			<strong data-i18n="report.notice.title">Wichtiger Hinweis</strong>
+			<p data-i18n="report.notice.body">Bitte melde nur Links, die du tatsächlich für Phishing, Malware, Betrug oder anderen Missbrauch hältst. Die Bestätigung bleibt absichtlich neutral und verrät nicht, ob ein Link existiert.</p>
+		</section>
+
+		<form id="report-form" class="report-form">
+			<div class="report-field">
+				<label for="report-url" data-i18n="report.url.label">Kurz-URL oder Ziel-URL</label>
+				<input
+					type="url"
+					id="report-url"
+					name="url"
+					required
+					autocomplete="url"
+					data-i18n-placeholder="report.url.placeholder"
+					placeholder="https://aadd.li/r/abc123"
+					data-i18n-aria-label="report.url.aria"
+					aria-label="Zu meldende URL" />
+				<small data-i18n="report.url.help">Du kannst entweder die aadd.li-Kurz-URL oder die vollständige Ziel-URL eintragen.</small>
+			</div>
+
+			<div class="report-field">
+				<label for="report-note" data-i18n="report.note.label">Freitext (optional)</label>
+				<textarea
+					id="report-note"
+					name="note"
+					maxlength="2000"
+					data-i18n-placeholder="report.note.placeholder"
+					placeholder="Was macht den Link verdächtig?"></textarea>
+				<small data-i18n="report.note.help">Zum Beispiel: Phishing-Seite, gefälschter Login, Malware-Download oder irreführende Weiterleitung.</small>
+			</div>
+
+			<div class="report-field">
+				<div class="cf-turnstile" id="report-turnstile" data-sitekey="0x4AAAAAADbpOlBRRbbVqTc5" data-theme="light"></div>
+				<small data-i18n="report.turnstile.help">Zum Schutz vor Formular-Missbrauch ist eine kurze Bot-Prüfung erforderlich.</small>
+			</div>
+
+			<div id="report-status" class="report-status" aria-live="polite"></div>
+
+			<button type="submit" id="report-submit" class="report-submit" data-i18n="report.submit">Meldung senden</button>
+		</form>
+
+		<nav class="report-footer">
+			<a href="/impressum" data-i18n="footer.impressum">Impressum</a>
+			<a href="/privacy" data-i18n="footer.privacy">Datenschutz</a>
+		</nav>
+	</main>
+
+	<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+	<script src="/i18n.js" defer></script>
+	<script src="/report.js" defer></script>
+</body>
+</html>

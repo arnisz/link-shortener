@@ -7,6 +7,10 @@ export interface Env {
 	WAECHTER_TOKEN: string;
 	ADMIN_TOKEN: string;
 	APP_BASE_URL: string;
+	MAIL_NOTIFY_URL: string;
+	MAIL_NOTIFY_TOKEN: string;
+	TURNSTILE_SECRET_KEY: string;
+	TURNSTILE_SITE_KEY: string;
 }
 
 export type GoogleTokenResponse = {

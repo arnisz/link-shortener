@@ -34,6 +34,18 @@ export const ACTIVE_REVALIDATION_HIGH_DELTA_THRESHOLD = 100;
 export const ACTIVE_REVALIDATION_MEDIUM_RECHECK_HOURS = 1;
 /** Active-Revalidation: ab 100 neuen Klicks seit dem letzten Scan → Reclaim nach 30 Minuten. */
 export const ACTIVE_REVALIDATION_HIGH_RECHECK_MINUTES = 30;
+/** Abuse-Meldungen: ab diesem Zählerstand wird auf Warning eskaliert. */
+export const ABUSE_WARN_THRESHOLD = 2;
+/** Abuse-Meldungen: hartes Zähler-Cap gegen ASN-Rotation. */
+export const ABUSE_HARD_LIMIT = 10;
+/** Abuse-Endpoint: per-IP-Limit pro Minute. */
+export const ABUSE_REPORT_RATE_LIMIT = 20;
+/** Flood-Schutz: Sperrfenster in Sekunden pro ASN (API + Formular teilen denselben Key). */
+export const REPORT_FLOOD_WINDOW_S = 600;
+/** Formular-Handler: maximale Länge des optionalen Freitext-Felds. */
+export const REPORT_FORM_NOTE_MAX_LEN = 800;
+/** Formular-Audit: Retention in Tagen für abuse_form_reports (Cron-Cleanup). */
+export const ABUSE_FORM_RETENTION_DAYS = 3;
 
 export const SECURITY_TXT = `Contact: mailto:security@xx.xx
 Expires: 2027-06-01T00:00:00+00:00
