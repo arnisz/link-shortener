@@ -32,6 +32,7 @@ Required **secrets** (set via `wrangler secret put`):
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
 - `SESSION_SECRET`
+- `TURNSTILE_SECRET_KEY`
 - `WAECHTER_TOKEN` â€” Bearer token for `/api/internal/*` endpoints
 - `MAIL_NOTIFY_TOKEN` â€” Bearer token for the abuse mail-notify endpoint
 
@@ -88,7 +89,9 @@ For remote (production): replace `--local` with `--remote`.
 | POST | `/logout` | `handleLogout` |
 | POST | `/api/links/anonymous` | `handleCreateAnonymousLink` |
 | POST | `/api/links` | `handleCreateLink` |
+| GET | `/report` | statische Meldeformular-Seite `public/report.html` |
 | POST | `/api/report/:code` | `handleReportAbuse` |
+| POST | `/api/report-form` | `handleReportForm` |
 | GET | `/api/links` | `handleGetLinks` (cursor-based pagination: `?cursor=ISO\|id&limit=N`, default 50, max 100) |
 | POST | `/api/links/:code/update` | `handleUpdateLink` |
 | POST | `/api/links/:code/delete` | `handleDeleteLink` |
@@ -126,7 +129,7 @@ For remote (production): replace `--local` with `--remote`.
 - **Short codes**: 6-char alphanumeric, bias-free generation in `generateShortCode` (`src/validation.ts`).
 - **Hashtags**: Authenticated users can assign up to 10 tags per link (limit `TAG_MAX_PER_LINK`). Tags are normalized (NFKC, lowercase, leading # removed, trim), 1â€“50 chars, starting with alphanumeric `[a-z0-9][a-z0-9_-]*`. Tags are validated via `validateTag(raw)` in `src/validation.ts`. Tags are strictly user-scoped; orphaned tags are garbage collected after each mutation (`UPDATE`, `DELETE`). **Tag updates are full-replace**: sending `tags: []` removes all tags; sending `tags: ["foo"]` replaces all existing tags with `["foo"]`. D1 tag operations use **two-phase batching** because junction-table inserts (`link_tags`) need the AUTOINCREMENT `tag_id` â€” first batch inserts into `tags`, second batch inserts into `link_tags` using a `SELECT â€¦ WHERE name = ?` subquery.
 - **Search**: `GET /api/links?q=<term>` searches via case-insensitive substring in alias, title, and tag names. Term is trimmed and capped at 100 chars. Case-insensitivity is ensured via `LOWER()` in SQL.
-- **Alias reserved words**: `["api", "login", "logout", "app", "r", "stats", "warning", "user-administration", "admin"]` â€” checked in `ALIAS_RESERVED` (`src/validation.ts`). `stats` reserved for external stats/paywall worker. `warning` reserved for the Interstitial-Page route. Add every new top-level Worker path here immediately when introduced.
+- **Alias reserved words**: `["api", "login", "logout", "app", "r", "stats", "warning", "user-administration", "admin", "report"]` â€” checked in `ALIAS_RESERVED` (`src/validation.ts`). `stats` reserved for external stats/paywall worker. `warning` reserved for the Interstitial-Page route. `report` reserved for the menschliche Meldeformular-Seite. Add every new top-level Worker path here immediately when introduced.
 - **Logging**: use `log(category, message)` from `src/utils.ts`; it wraps `console.log` with `[category]` prefix. **Security constraints**: never log full cookie values, session IDs, OAuth tokens, or `SESSION_SECRET` â€” at most log the first 8 characters of a session ID for correlation (e.g. `sid=4fc38ab5â€¦`). On auth-related rejections, always include a short `reason` string (e.g. `session_not_found`, `expired`, `csrf_mismatch`) so Tail Logs are interpretable without consulting source code.
 - **HTML escaping**: use `escapeHtml(str)` from `src/utils.ts` for any user-supplied content embedded in HTML contexts. Mandatory for `target_url` on `/warning` (Stored-XSS vector).
 - **Ownership enforcement**: Update/delete queries include `AND user_id = ?` directly in the `WHERE` clause (atomic, prevents TOCTOU). `result.meta.changes === 0` returns 404 for both "not found" and "wrong owner" â€” intentionally no distinction to prevent user enumeration.
@@ -385,6 +388,27 @@ Cache-Invalidierung nach User-Aktion: Toggle `is_active` und Inline-Edit `short_
 - Produktions-Endpoint für Abuse-Mails: `MAIL_NOTIFY_URL = https://abuse.szathmary.net/api/abuse-notify` (nicht `mail.aadd.li`).
 - Wächter-Floor: `handleInternalScanResult` kann abuse-erzwungenes `warning` nicht auf `active` zurückstufen; `blocked` bleibt möglich.
 - Admin-Reset: `PATCH /api/admin/links/:id` mit `abuse_flag_count = 0` setzt den Zähler zurück und löscht `abuse_reports`; `status` wird dabei bewusst nicht automatisch verändert.
+
+### Menschliches Meldeformular (`/report`) (implementiert)
+
+- Öffentliche Formular-Seite: `GET /report` liefert `public/report.html`; Client-Logik liegt in `public/report.js`.
+- Formular-Endpoint: `POST /api/report-form` in `src/handlers/report-form.ts`; erwartet JSON mit `url`, optional `note` und `turnstileToken`.
+- Turnstile ist serverseitig verpflichtend: `verifyTurnstile(...)` ruft `https://challenges.cloudflare.com/turnstile/v0/siteverify` auf; Netz-/API-Fehler sind **nicht** fails-open.
+- Input-Auflösung: Das Formular akzeptiert sowohl `aadd.li/r/<code>` als auch Ziel-URLs; bei Ziel-URLs werden alle passenden reportbaren Links eskaliert.
+- Flood-Schutz: `checkFlood(asn, env)` läuft einmal pro Submission vor der Eskalationsschleife; `setFlood(asn, env)` wird genau einmal nach der Schleife ausgeführt, wenn mindestens ein echter neuer Abuse-Report entstanden ist.
+- Anti-Enumeration: Auch bei 0 Treffern oder ungültigem URL-Format wird eine neutrale `200`-Bestätigung geliefert; Audit-Eintrag in `abuse_form_reports` erfolgt trotzdem.
+- Audit-Speicherung: `abuse_form_reports` speichert pro Submission `ip`, `reported_at`, optional `short_code` des ersten Treffers und `raw_input`; die volle Client-IP wird bewusst für Missbrauchsabwehr erfasst.
+- CSP/SW-Betrieb: `/report` nutzt eine statische CSP aus `public/_headers` mit `https://challenges.cloudflare.com`; `public/sw.js` lässt Cross-Origin-Requests frühzeitig ungecacht ans Netzwerk durch, damit Turnstile nicht durch den Service Worker blockiert wird.
+- Produktionsstand: echtes Turnstile-Widget aktiv; die End-to-End-Kette Formular â†’ Turnstile â†’ `/api/report-form` â†’ Eskalation â†’ Mail â†’ Audit-Zeile wurde live bestätigt.
+
+### Offene Folgepunkte zum Meldeformular
+
+- Retention der vollen IP in `abuse_form_reports` weiterhin aktiv nachweisen: `scheduled`-Cleanup für Datensätze älter als `ABUSE_FORM_RETENTION_DAYS` muss noch einmal gezielt live verifiziert werden.
+- Anti-Enumeration über das Formular noch einmal explizit im Live-Betrieb gegen eine nicht existente URL prüfen.
+- Mehrfach-Treffer live mit zwei Links auf dieselbe Ziel-URL noch einmal explizit gegenprüfen (beide Zähler hoch, sofern keine ASN-Dedup greift).
+- Niedrige Priorität: verbleibendes `report:133`-/Cloudflare-Injection-Rauschen in der Browser-Konsole weiter beobachten; blockiert das Widget aktuell nicht mehr.
+- Eigenes Folge-Ticket: koordinierte Angriffe mit vielen ASNs / Botnetz bleiben bewusst außerhalb des aktuellen Flood-Modells.
+- Eigenes Folge-Ticket: Forscher-Öffnung der Abuse-API via `security.txt`/öffentlicher Dokumentation.
 
 ### `/api/internal/links/pending` â€” Tiered Revalidation (Phase 6, implementiert)
 

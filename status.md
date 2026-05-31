@@ -1,5 +1,35 @@
 # Status Log
 
+## 2026-06-01 — Abschluss: Menschliches Abuse-Meldeformular live
+
+**Status:** implementiert ✅ — 2026-06-01
+
+### Umgesetzte Aenderungen
+
+- `sql/abuse_form_reports.sql` — neue Audit-Tabelle fuer Formular-Submissions eingefuehrt; speichert `ip`, `reported_at`, optional `short_code` des ersten Treffers und `raw_input`.
+- `src/handlers/abuse.ts` — Flood-Logik in Handler-Verantwortung aufgeteilt (`checkFlood` / `setFlood`); `escalateReport(...)` ist jetzt kanal-agnostisch und liefert `{ inserted }` fuer API und Formular zurueck.
+- `src/handlers/report-form.ts` + `src/index.ts` — neuer oeffentlicher Endpoint `POST /api/report-form`; serverseitige Turnstile-Pruefung, neutrale 200-Antwort bei 0 Treffern, Mehrfach-Treffer auf dieselbe Ziel-URL und Audit-Insert pro Submission.
+- `public/report.html` + `public/report.js` + `public/index.html` + `public/i18n.js` — menschliche Meldeformular-Seite `/report` mit DE/EN/ES/FR, Hinweistext, URL-Eingabe, optionalem Freitext, echtem Turnstile-Widget und Einstieg von der Startseite umgesetzt.
+- `public/_headers` — route-spezifische CSP fuer `/report` / `/report.html` mit `https://challenges.cloudflare.com` in `script-src`, `connect-src` und `frame-src` hinterlegt.
+- `public/sw.js` — Service Worker laesst Cross-Origin-Requests direkt ans Netzwerk durch; Cache-Version wurde mehrfach erhoeht, damit Turnstile-Assets und aktualisiertes `/report` nicht an altem SW-Cache scheitern.
+- `src/validation.ts` + `AGENTS.md` — `report` als reservierter Alias dokumentiert/abgesichert; Projektdokumentation fuer Formularpfad, Turnstile und offene Folgepunkte nachgezogen.
+- `test/abuse.spec.ts`, `test/report-form.spec.ts`, `test/public_login.spec.ts` — Flood-/Dedup-/Cross-Channel-/Mehrfach-Kaskaden-/Service-Worker-Regressionsfaelle fuer API und Formular ergaenzt.
+
+### Live bestaetigt
+
+- End-to-End-Kette erfolgreich bestaetigt: Formular-Submission -> Turnstile-Verifikation mit echtem Widget -> `POST /api/report-form` -> `escalateReport` -> `abuse_flag_count` erhoeht -> Abuse-Mail versendet -> Audit-Zeile in `abuse_form_reports` angelegt.
+- Die volle Client-IP (inklusive IPv6) wird in `abuse_form_reports` gespeichert; das ist bewusst fuer Missbrauchsabwehr so entschieden.
+- Flood-Schutz fuer beide Kanaele, ASN-Dedup, CSP fuer `/report` und der Service-Worker-Passthrough fuer Turnstile wurden im Verlauf separat verifiziert; laut letztem bestaetigten Stand war die Gesamtsuite bei **956/956** grün.
+
+### Offen / Folgepunkte
+
+- Retention der vollen IP noch einmal explizit live nachweisen: der `scheduled`-Cleanup fuer `abuse_form_reports` muss zeigen, dass Eintraege spaetestens nach `ABUSE_FORM_RETENTION_DAYS` entfernt werden.
+- Anti-Enumeration ueber das Formular noch einmal gezielt live pruefen: nicht existente URL melden und dieselbe neutrale Bestätigung erwarten.
+- Mehrfach-Treffer live noch einmal explizit pruefen: zwei Links auf dieselbe Ziel-URL sollen bei einer Meldung beide Zaehler erhoehen, sofern keine ASN-Dedup greift.
+- Niedrige Prioritaet: verbleibendes `report:133`-/Cloudflare-Injection-Rauschen in der Browser-Konsole weiter beobachten; zuletzt blockierte es das Widget nicht mehr.
+- Folge-Ticket ausserhalb dieses Tasks: koordinierte Angriffe mit vielen ASNs / Botnetz.
+- Folge-Ticket ausserhalb dieses Tasks: Forscher-Oeffnung der Abuse-API via `security.txt`/oeffentlicher Dokumentation.
+
 ## 2026-05-31 — Abschluss: Abuse-Mailserver live geschaltet
 
 **Status:** implementiert ✅ — 2026-05-31
